@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtualenv / Conda
+.env
+.venv
+venv/
+env/
+*.conda
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
