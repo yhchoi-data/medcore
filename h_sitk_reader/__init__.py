@@ -1,5 +1,6 @@
 from .reader import ImageReader
 from .sitk_utils import (
+    sitk_write_nii,
     sitk_get_array,
     sitk_make_euler3dtransform,
     sitk_resampler,
@@ -8,6 +9,7 @@ from .sitk_utils import (
 
 __all__ = [
     "ImageReader",
+    "sitk_write_nii",
     "sitk_get_array",
     "sitk_make_euler3dtransform",
     "sitk_resampler",

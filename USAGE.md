@@ -111,9 +111,7 @@ tfm = sitk_make_euler3dtransform(
     rotation_deg = 15, 
     axis='x'
 )
-
 ```
-
 ---
 
 ## 5. Resampler
@@ -153,7 +151,9 @@ Available interpolators:
 
 ---
 
-## 6. Exporting Dicom to NIfTI
+## 6. Convert Dicom to NIfTI
+
+Dicoms can be converted to NIfTI file. 
 
 ```python
 from h_sitk_reader import ImageReader
@@ -161,13 +161,33 @@ from h_sitk_reader import ImageReader
 reader = ImageReader(
     "/path/to/dicom_dir",
 )
-reader.write_nifti("/path/to/dicom_dir/nifti.nii.gz")
+reader.to_nifti("/path/to/dicom_dir/nifti.nii.gz")
 
 ```
-
 - Output preserves physical metadata
 - Suitable for downstream ML pipelines
 
+---
+
+## 7. Save NIfTI file
+Images (SimpleITK or nd.array) can be saved as a NIfTI file.
+
+```python
+from h_sitk_reader import ImageReader, sitk_write_nii
+
+vol = ImageReader(
+    "/path/to/image.nii.gz",
+).read()
+img = sitk_get_array(
+    vol
+)
+
+# processing ...... > out_vol or out_img
+sitk_write_nii(out_vol, "/path/to/out.nii.gz")
+sitk_write_nii(out_img, "/path/to/out.nii.gz", reference=vol)
+```
+
+---
 
 ## 8. Notes and limitations
 

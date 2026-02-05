@@ -65,7 +65,7 @@ class ImageReader:
     def read(self) -> sitk.Image:
         return self.sitk_volume
 
-    def write_nifti(
+    def to_nifti(
         self,
         output_path: Union[str, Path],
         compress: bool = True,

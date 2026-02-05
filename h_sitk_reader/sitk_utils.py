@@ -1,6 +1,80 @@
-from typing import Optional, Tuple, Sequence, List
+from typing import Optional, Tuple, Sequence, List, Union
 import SimpleITK as sitk
 import numpy as np
+from pathlib import Path
+
+def sitk_write_nii(
+    image: Union[sitk.Image, np.ndarray],
+    output_path: str,
+    reference: sitk.Image | None = None,
+    compress: bool = True,
+    overwrite: bool = True,
+    verbose: bool = True,
+):
+    """
+    Write image to NIfTI format using SimpleITK.
+
+    Parameters
+    ----------
+    image : sitk.Image or np.ndarray
+        Image to write.
+        NumPy array must be in (z, y, x) order.
+    out_path : str
+        Output NIfTI file path (.nii or .nii.gz).
+    reference : sitk.Image
+        Reference image to copy physical metadata.
+        REQUIRED when image is a NumPy array.
+    compress : bool, default=True
+        Write compressed NIfTI (.nii.gz) if True.
+
+    Raises
+    ------
+    ValueError
+        If image is np.ndarray and reference is None.
+    TypeError
+        If image type is unsupported.
+    """
+
+    output_path = Path(output_path)
+
+    # suffix 처리
+    if output_path.suffix not in {".nii", ".gz"}:
+        raise ValueError("Output path must end with .nii or .nii.gz")
+
+    if output_path.exists() and not overwrite:
+        raise FileExistsError(f"File already exists: {output_path}")
+
+    # .nii + compress=True → .nii.gz
+    if output_path.suffix == ".nii" and compress:
+        output_path = output_path.with_suffix(".nii.gz")
+
+    # 디렉토리 생성
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # --- case 1: SimpleITK image ---
+    if isinstance(image, sitk.Image):
+        sitk_img = image
+
+    # --- case 2: NumPy array (reference REQUIRED) ---
+    elif isinstance(image, np.ndarray):
+        if reference is None:
+            raise ValueError(
+                "`reference` must be provided when image is a NumPy array."
+            )
+
+        sitk_img = sitk.GetImageFromArray(image)
+        sitk_img.CopyInformation(reference)
+
+    else:
+        raise TypeError(
+            f"Unsupported image type: {type(image)}. "
+            "Expected sitk.Image or np.ndarray."
+        )
+
+    sitk.WriteImage(sitk_img, str(output_path))
+
+    if verbose:
+        print(f"Saved NIfTI: {output_path}")
 
 def sitk_get_array(
         volume: sitk.Image,
