@@ -38,6 +38,7 @@ class ImageReader:
         # --- Thin-slice preference ---
         prefer_thin_slice: bool = True,
         max_slice_thickness_mm: Optional[float] = None,          # hard filter if thickness known (e.g. 5.0)
+        read_all_acquisitions: bool = False,
     ) -> None:
         self.input_path = Path(input_path)
         self.check_coord_flag = check_coord_flag
@@ -51,13 +52,20 @@ class ImageReader:
         self.prefer_body_part = prefer_body_part or []
         self.prefer_thin_slice = prefer_thin_slice
         self.max_slice_thickness_mm = max_slice_thickness_mm
+        self.read_all_acquisitions = read_all_acquisitions
 
         self.sitk_volume = self.load_medical_image(self.input_path)
 
         if self.check_coord_flag:
-            self.sitk_volume = self.standardize_orientation(
-                self.sitk_volume, target_orientation=self.target_orientation
-            )
+            if isinstance(self.sitk_volume, dict):
+                self.sitk_volume = {
+                    k: self.standardize_orientation(v, target_orientation=self.target_orientation)
+                    for k, v in self.sitk_volume.items()
+                }
+            else:
+                self.sitk_volume = self.standardize_orientation(
+                    self.sitk_volume, target_orientation=self.target_orientation
+                )
 
     # -------------------------
     # Convenience API
@@ -245,6 +253,16 @@ class ImageReader:
 
         # 2) Fallback to pydicom stacking (single best series by UID)
         try:
+            if self.read_all_acquisitions:
+                vols = self.dcmread_series_grouped(str(folder))
+                images = {}
+                for acq, (volume, first_ds) in vols.items():
+                    img = self.array2sitk(volume, first_ds)
+                    self._attach_dicom_metadata(img, first_ds)
+                    images[acq] = img
+                if self.verbose:
+                    print(f"Loaded DICOM via pydicom stacking fallback (acquisitions={len(images)})")
+                return images
             volume, first_ds = self.dcmread_series(str(folder))
             img = self.array2sitk(volume, first_ds)
             self._attach_dicom_metadata(img, first_ds)
@@ -264,10 +282,76 @@ class ImageReader:
         if best_files is None:
             raise RuntimeError("Failed to select DICOM series by criteria.")
 
+        if self.read_all_acquisitions:
+            groups = self._group_files_by_acquisition(best_files)
+            images = {}
+            for acq, files in groups.items():
+                reader = sitk.ImageSeriesReader()
+                reader.SetFileNames(files)
+                reader.MetaDataDictionaryArrayUpdateOn()
+                reader.LoadPrivateTagsOff()
+                img = reader.Execute()
+
+                # Detect non-uniform slice spacing using ImagePositionPatient (0020|0032)
+                try:
+                    md_arr = reader.GetMetaDataDictionaryArray()
+                    zs = []
+                    for md in md_arr:
+                        if md.HasKey("0020|0032"):
+                            parts = md["0020|0032"].split(\\)
+                            if len(parts) >= 3:
+                                zs.append(float(parts[2]))
+                    if len(zs) >= 3:
+                        zs = sorted(zs)
+                        diffs = [abs(zs[i + 1] - zs[i]) for i in range(len(zs) - 1)]
+                        if (max(diffs) - min(diffs)) > 1e-3:
+                            raise RuntimeError(
+                                "Non-uniform slice spacing detected in series; fallback to pydicom stacking."
+                            )
+                except Exception as e:
+                    raise RuntimeError(str(e))
+
+                # Optionally copy representative per-slice metadata into image metadata
+                try:
+                    if reader.GetMetaDataDictionaryArraySize() > 0:
+                        md0 = reader.GetMetaDataDictionaryArray()[0]
+                        for k in md0.GetKeys():
+                            try:
+                                img.SetMetaData(k, md0[k])
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+                images[acq] = img
+
+            if self.verbose:
+                print(f"[DICOM] Found acquisitions: {list(images.keys())}")
+            return images
+
         reader.SetFileNames(best_files)
         reader.MetaDataDictionaryArrayUpdateOn()
         reader.LoadPrivateTagsOff()
         img = reader.Execute()
+
+        # Detect non-uniform slice spacing using ImagePositionPatient (0020|0032)
+        try:
+            md_arr = reader.GetMetaDataDictionaryArray()
+            zs = []
+            for md in md_arr:
+                if md.HasKey("0020|0032"):
+                    parts = md["0020|0032"].split("\\")
+                    if len(parts) >= 3:
+                        zs.append(float(parts[2]))
+            if len(zs) >= 3:
+                zs = sorted(zs)
+                diffs = [abs(zs[i + 1] - zs[i]) for i in range(len(zs) - 1)]
+                if (max(diffs) - min(diffs)) > 1e-3:
+                    raise RuntimeError(
+                        "Non-uniform slice spacing detected in series; fallback to pydicom stacking."
+                    )
+        except Exception as e:
+            raise RuntimeError(str(e))
 
         # Optionally copy representative per-slice metadata into image metadata
         try:
@@ -365,6 +449,35 @@ class ImageReader:
             print(f"  SpacingBetweenSlices: {meta.get('SpacingBetweenSlices')}")
 
         return best[3]
+
+    def _group_files_by_acquisition(self, files: List[str]) -> Dict[str, List[str]]:
+        groups: Dict[str, List[tuple[float, str]]] = {}
+        for f in files:
+            try:
+                ds = pydicom.dcmread(f, stop_before_pixels=True, force=True)
+            except Exception:
+                continue
+            acq = getattr(ds, 'AcquisitionNumber', None)
+            key = str(acq) if acq is not None else 'NA'
+            # Sort by InstanceNumber or ImagePositionPatient[2]
+            sort_val = 0.0
+            if hasattr(ds, 'InstanceNumber'):
+                try:
+                    sort_val = float(ds.InstanceNumber)
+                except Exception:
+                    pass
+            elif hasattr(ds, 'ImagePositionPatient'):
+                try:
+                    sort_val = float(ds.ImagePositionPatient[2])
+                except Exception:
+                    pass
+            groups.setdefault(key, []).append((sort_val, f))
+
+        grouped_files: Dict[str, List[str]] = {}
+        for k, lst in groups.items():
+            lst.sort(key=lambda x: x[0])
+            grouped_files[k] = [f for _, f in lst]
+        return grouped_files
 
     def _read_dicom_meta(self, dcm_path: str) -> Dict[str, Any]:
         """
@@ -466,6 +579,61 @@ class ImageReader:
 
         return volume, dicoms[0]
 
+    def dcmread_series_grouped(self, folder_path: str) -> Dict[str, Tuple[np.ndarray, pydicom.Dataset]]:
+        files = [os.path.join(folder_path, f) for f in os.listdir(folder_path)]
+        dicoms = []
+
+        for f in files:
+            try:
+                ds = pydicom.dcmread(f, force=True)
+                if hasattr(ds, 'PixelData'):
+                    dicoms.append(ds)
+            except Exception:
+                continue
+
+        if len(dicoms) == 0:
+            raise RuntimeError('No valid DICOM files found in folder.')
+
+        series_uids = [ds.SeriesInstanceUID for ds in dicoms if hasattr(ds, 'SeriesInstanceUID')]
+        if not series_uids:
+            raise RuntimeError('No SeriesInstanceUID found in DICOM files.')
+
+        most_common_uid, _ = Counter(series_uids).most_common(1)[0]
+        dicoms = [ds for ds in dicoms if getattr(ds, 'SeriesInstanceUID', None) == most_common_uid]
+
+        def sort_key(ds: pydicom.Dataset) -> float:
+            if hasattr(ds, 'InstanceNumber'):
+                try:
+                    return float(ds.InstanceNumber)
+                except Exception:
+                    pass
+            if hasattr(ds, 'ImagePositionPatient'):
+                try:
+                    return float(ds.ImagePositionPatient[2])
+                except Exception:
+                    pass
+            return 0.0
+
+        groups: Dict[str, List[pydicom.Dataset]] = {}
+        for ds in dicoms:
+            acq = getattr(ds, 'AcquisitionNumber', None)
+            key = str(acq) if acq is not None else 'NA'
+            groups.setdefault(key, []).append(ds)
+
+        out: Dict[str, Tuple[np.ndarray, pydicom.Dataset]] = {}
+        for k, lst in groups.items():
+            lst.sort(key=sort_key)
+            slices = [d.pixel_array for d in lst]
+            volume = np.stack(slices, axis=-1).astype(np.float32)
+
+            intercept = float(lst[0].get('RescaleIntercept', 0.0))
+            slope = float(lst[0].get('RescaleSlope', 1.0))
+            volume = volume * slope + intercept
+
+            out[k] = (volume, lst[0])
+
+        return out
+
     @staticmethod
     def array2sitk(volume: np.ndarray, reference_ds: pydicom.Dataset) -> sitk.Image:
         # volume: (H, W, D) -> SITK expects array (Z, Y, X)
@@ -521,4 +689,3 @@ class ImageReader:
 
         if self.verbose:
             print(f"Metadata copied from pydicom first slice: {total - fail}/{total} succeeded.")
-
