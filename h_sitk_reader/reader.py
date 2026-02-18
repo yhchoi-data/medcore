@@ -39,6 +39,7 @@ class ImageReader:
         prefer_thin_slice: bool = True,
         max_slice_thickness_mm: Optional[float] = None,          # hard filter if thickness known (e.g. 5.0)
         read_all_acquisitions: bool = False,
+        read_all_series: bool = False,
     ) -> None:
         self.input_path = Path(input_path)
         self.check_coord_flag = check_coord_flag
@@ -53,15 +54,23 @@ class ImageReader:
         self.prefer_thin_slice = prefer_thin_slice
         self.max_slice_thickness_mm = max_slice_thickness_mm
         self.read_all_acquisitions = read_all_acquisitions
+        self.read_all_series = read_all_series
 
         self.sitk_volume = self.load_medical_image(self.input_path)
 
         if self.check_coord_flag:
             if isinstance(self.sitk_volume, dict):
-                self.sitk_volume = {
-                    k: self.standardize_orientation(v, target_orientation=self.target_orientation)
-                    for k, v in self.sitk_volume.items()
-                }
+                # handle dict of images or nested dict (series -> acquisitions)
+                out = {}
+                for k, v in self.sitk_volume.items():
+                    if isinstance(v, dict):
+                        out[k] = {
+                            kk: self.standardize_orientation(vv, target_orientation=self.target_orientation)
+                            for kk, vv in v.items()
+                        }
+                    else:
+                        out[k] = self.standardize_orientation(v, target_orientation=self.target_orientation)
+                self.sitk_volume = out
             else:
                 self.sitk_volume = self.standardize_orientation(
                     self.sitk_volume, target_orientation=self.target_orientation
@@ -253,6 +262,18 @@ class ImageReader:
 
         # 2) Fallback to pydicom stacking (single best series by UID)
         try:
+            if self.read_all_series:
+                vols = self.dcmread_series_grouped_by_series(str(folder))
+                images = {}
+                for sid, acq_map in vols.items():
+                    images[sid] = {}
+                    for acq, (volume, first_ds) in acq_map.items():
+                        img = self.array2sitk(volume, first_ds)
+                        self._attach_dicom_metadata(img, first_ds)
+                        images[sid][acq] = img
+                if self.verbose:
+                    print(f"Loaded DICOM via pydicom stacking fallback (series={len(images)})")
+                return images
             if self.read_all_acquisitions:
                 vols = self.dcmread_series_grouped(str(folder))
                 images = {}
@@ -278,6 +299,46 @@ class ImageReader:
         if not series_ids:
             raise RuntimeError("No DICOM series IDs found.")
 
+        if self.read_all_series:
+            images = {}
+            for sid in series_ids:
+                files = sitk.ImageSeriesReader.GetGDCMSeriesFileNames(str(folder), sid)
+                if not files:
+                    continue
+                try:
+                    if self.read_all_acquisitions:
+                        groups = self._group_files_by_acquisition(files)
+                        images[sid] = {}
+                        for acq, f_list in groups.items():
+                            try:
+                                reader = sitk.ImageSeriesReader()
+                                reader.SetFileNames(f_list)
+                                reader.MetaDataDictionaryArrayUpdateOn()
+                                reader.LoadPrivateTagsOff()
+                                img = reader.Execute()
+                                images[sid][acq] = img
+                            except Exception as e:
+                                if self.verbose:
+                                    print(f"[WARN] Series {sid} acq {acq} read failed: {e}")
+                        if len(images[sid]) == 0:
+                            images.pop(sid, None)
+                    else:
+                        reader = sitk.ImageSeriesReader()
+                        reader.SetFileNames(files)
+                        reader.MetaDataDictionaryArrayUpdateOn()
+                        reader.LoadPrivateTagsOff()
+                        img = reader.Execute()
+                        images[sid] = img
+                except Exception as e:
+                    if self.verbose:
+                        print(f"[WARN] Series {sid} read failed: {e}")
+                    continue
+            if self.verbose:
+                print(f"[DICOM] Found series: {list(images.keys())}")
+            if len(images) == 0:
+                raise RuntimeError("Failed to read any series with SimpleITK.")
+            return images
+
         best_files = self._select_best_series_files(folder, series_ids)
         if best_files is None:
             raise RuntimeError("Failed to select DICOM series by criteria.")
@@ -298,7 +359,7 @@ class ImageReader:
                     zs = []
                     for md in md_arr:
                         if md.HasKey("0020|0032"):
-                            parts = md["0020|0032"].split(\\)
+                            parts = md["0020|0032"].split("\\")
                             if len(parts) >= 3:
                                 zs.append(float(parts[2]))
                     if len(zs) >= 3:
@@ -634,10 +695,79 @@ class ImageReader:
 
         return out
 
+    def dcmread_series_grouped_by_series(self, folder_path: str) -> Dict[str, Dict[str, Tuple[np.ndarray, pydicom.Dataset]]]:
+        files = [os.path.join(folder_path, f) for f in os.listdir(folder_path)]
+        dicoms = []
+
+        for f in files:
+            try:
+                ds = pydicom.dcmread(f, force=True)
+                if hasattr(ds, 'PixelData'):
+                    dicoms.append(ds)
+            except Exception:
+                continue
+
+        if len(dicoms) == 0:
+            raise RuntimeError('No valid DICOM files found in folder.')
+
+        groups_by_series: Dict[str, List[pydicom.Dataset]] = {}
+        for ds in dicoms:
+            sid = getattr(ds, 'SeriesInstanceUID', None)
+            if sid is None:
+                continue
+            groups_by_series.setdefault(str(sid), []).append(ds)
+
+        def sort_key(ds: pydicom.Dataset) -> float:
+            if hasattr(ds, 'InstanceNumber'):
+                try:
+                    return float(ds.InstanceNumber)
+                except Exception:
+                    pass
+            if hasattr(ds, 'ImagePositionPatient'):
+                try:
+                    return float(ds.ImagePositionPatient[2])
+                except Exception:
+                    pass
+            return 0.0
+
+        out: Dict[str, Dict[str, Tuple[np.ndarray, pydicom.Dataset]]] = {}
+        for sid, lst in groups_by_series.items():
+            acq_groups: Dict[str, List[pydicom.Dataset]] = {}
+            for ds in lst:
+                acq = getattr(ds, 'AcquisitionNumber', None)
+                key = str(acq) if acq is not None else 'NA'
+                acq_groups.setdefault(key, []).append(ds)
+            out[sid] = {}
+            for acq, alist in acq_groups.items():
+                alist.sort(key=sort_key)
+                # group by pixel array shape to avoid stacking mismatch
+                shape_groups = {}
+                for d in alist:
+                    try:
+                        shape = d.pixel_array.shape
+                    except Exception:
+                        continue
+                    shape_groups.setdefault(shape, []).append(d)
+                if not shape_groups:
+                    continue
+                # pick the largest shape group
+                shape, alist2 = max(shape_groups.items(), key=lambda kv: len(kv[1]))
+                alist2.sort(key=sort_key)
+                slices = [d.pixel_array for d in alist2]
+                volume = np.stack(slices, axis=-1).astype(np.float32)
+                intercept = float(alist2[0].get('RescaleIntercept', 0.0))
+                slope = float(alist2[0].get('RescaleSlope', 1.0))
+                volume = volume * slope + intercept
+                out[sid][acq] = (volume, alist2[0])
+        return out
+
     @staticmethod
     def array2sitk(volume: np.ndarray, reference_ds: pydicom.Dataset) -> sitk.Image:
         # volume: (H, W, D) -> SITK expects array (Z, Y, X)
-        img = sitk.GetImageFromArray(volume.transpose(2, 0, 1))
+        if volume.ndim == 2:
+            img = sitk.GetImageFromArray(volume)
+        else:
+            img = sitk.GetImageFromArray(volume.transpose(2, 0, 1))
 
         # Spacing
         spacing_xy = [1.0, 1.0]
