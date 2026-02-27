@@ -142,24 +142,42 @@ class ImageReader:
     def get_metadata(self) -> pd.DataFrame:
         """
         Extract metadata keys stored in the SimpleITK image (best-effort).
+        Supports single image or dict (series/acquisition) outputs.
         """
-        rows = []
-        for key in self.sitk_volume.GetMetaDataKeys():
-            value = self.sitk_volume.GetMetaData(key)
 
-            keyword = "Unknown"
-            description = "Unknown Tag"
-            try:
-                group, element = [int(k, 16) for k in key.split("|")]
-                tag = pydicom.tag.Tag(group, element)
-                keyword = pydicom.datadict.keyword_for_tag(tag) or "Unknown"
-                description = pydicom.datadict.dictionary_description(tag) or "Unknown Tag"
-            except Exception:
-                pass
+        def _rows_from_image(img: sitk.Image, source: str | None) -> List[Dict[str, Any]]:
+            rows: List[Dict[str, Any]] = []
+            for key in img.GetMetaDataKeys():
+                value = img.GetMetaData(key)
 
-            rows.append(
-                {"Tag": key, "Keyword": keyword, "Description": description, "Value": value}
-            )
+                keyword = "Unknown"
+                description = "Unknown Tag"
+                try:
+                    group, element = [int(k, 16) for k in key.split("|")]
+                    tag = pydicom.tag.Tag(group, element)
+                    keyword = pydicom.datadict.keyword_for_tag(tag) or "Unknown"
+                    description = pydicom.datadict.dictionary_description(tag) or "Unknown Tag"
+                except Exception:
+                    pass
+
+                row = {"Tag": key, "Keyword": keyword, "Description": description, "Value": value}
+                if source is not None:
+                    row["Source"] = source
+                rows.append(row)
+            return rows
+
+        rows: List[Dict[str, Any]] = []
+
+        if isinstance(self.sitk_volume, dict):
+            for k, v in self.sitk_volume.items():
+                if isinstance(v, dict):
+                    for kk, vv in v.items():
+                        rows.extend(_rows_from_image(vv, f"{k}:{kk}"))
+                else:
+                    rows.extend(_rows_from_image(v, str(k)))
+        else:
+            rows = _rows_from_image(self.sitk_volume, None)
+
         return pd.DataFrame(rows)
 
     # -------------------------
@@ -269,7 +287,7 @@ class ImageReader:
                     images[sid] = {}
                     for acq, (volume, first_ds) in acq_map.items():
                         img = self.array2sitk(volume, first_ds)
-                        self._attach_dicom_metadata(img, first_ds)
+                        img = self._attach_dicom_metadata(img, first_ds)
                         images[sid][acq] = img
                 if self.verbose:
                     print(f"Loaded DICOM via pydicom stacking fallback (series={len(images)})")
@@ -279,14 +297,14 @@ class ImageReader:
                 images = {}
                 for acq, (volume, first_ds) in vols.items():
                     img = self.array2sitk(volume, first_ds)
-                    self._attach_dicom_metadata(img, first_ds)
+                    img = self._attach_dicom_metadata(img, first_ds)
                     images[acq] = img
                 if self.verbose:
                     print(f"Loaded DICOM via pydicom stacking fallback (acquisitions={len(images)})")
                 return images
             volume, first_ds = self.dcmread_series(str(folder))
             img = self.array2sitk(volume, first_ds)
-            self._attach_dicom_metadata(img, first_ds)
+            img = self._attach_dicom_metadata(img, first_ds)
             if self.verbose:
                 print("Loaded DICOM via pydicom stacking fallback.")
             return img
@@ -303,6 +321,7 @@ class ImageReader:
             images = {}
             for sid in series_ids:
                 files = sitk.ImageSeriesReader.GetGDCMSeriesFileNames(str(folder), sid)
+                files = self._filter_files_by_iop_thickness(files)
                 if not files:
                     continue
                 try:
@@ -340,6 +359,8 @@ class ImageReader:
             return images
 
         best_files = self._select_best_series_files(folder, series_ids)
+        if best_files is not None:
+            best_files = self._filter_files_by_iop_thickness(best_files)
         if best_files is None:
             raise RuntimeError("Failed to select DICOM series by criteria.")
 
@@ -540,6 +561,56 @@ class ImageReader:
             grouped_files[k] = [f for _, f in lst]
         return grouped_files
 
+    def _filter_files_by_iop_thickness(self, files: List[str]) -> List[str]:
+        # Keep only files matching the modal ImageOrientationPatient and SliceThickness
+        iop_counts = {}
+        thk_counts = {}
+        meta = []
+        for f in files:
+            try:
+                ds = pydicom.dcmread(f, stop_before_pixels=True, force=True)
+            except Exception:
+                continue
+            iop = getattr(ds, 'ImageOrientationPatient', None)
+            thk = getattr(ds, 'SliceThickness', None)
+            iop_key = None
+            if iop is not None:
+                try:
+                    iop_key = tuple(round(float(x), 6) for x in iop)
+                except Exception:
+                    iop_key = None
+            thk_key = None
+            if thk is not None:
+                try:
+                    thk_key = round(float(thk), 6)
+                except Exception:
+                    thk_key = None
+            meta.append((f, iop_key, thk_key))
+            if iop_key is not None:
+                iop_counts[iop_key] = iop_counts.get(iop_key, 0) + 1
+            if thk_key is not None:
+                thk_counts[thk_key] = thk_counts.get(thk_key, 0) + 1
+
+        # If we can't compute, return original
+        if not meta or not iop_counts:
+            return files
+
+        iop_mode = max(iop_counts.items(), key=lambda kv: kv[1])[0]
+        thk_mode = None
+        if thk_counts:
+            thk_mode = max(thk_counts.items(), key=lambda kv: kv[1])[0]
+
+        filtered = []
+        for f, iop_key, thk_key in meta:
+            if iop_key != iop_mode:
+                continue
+            if thk_mode is not None and thk_key is not None and thk_key != thk_mode:
+                continue
+            filtered.append(f)
+
+        # fallback if too aggressive
+        return filtered if len(filtered) > 0 else files
+
     def _read_dicom_meta(self, dcm_path: str) -> Dict[str, Any]:
         """
         Read minimal DICOM tags (without pixels) for series selection.
@@ -587,13 +658,24 @@ class ImageReader:
 
         f = sitk.DICOMOrientImageFilter()
         f.SetDesiredCoordinateOrientation(target_orientation)
-        return f.Execute(img)
+        out = f.Execute(img)
+
+        # Preserve metadata keys dropped by DICOMOrientImageFilter.
+        try:
+            for key in img.GetMetaDataKeys():
+                try:
+                    out.SetMetaData(key, img.GetMetaData(key))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        return out
 
     # -------------------------
     # pydicom fallback helpers (kept)
     # -------------------------
-    @staticmethod
-    def dcmread_series(folder_path: str) -> Tuple[np.ndarray, pydicom.Dataset]:
+    def dcmread_series(self, folder_path: str) -> Tuple[np.ndarray, pydicom.Dataset]:
         files = [os.path.join(folder_path, f) for f in os.listdir(folder_path)]
         dicoms = []
 
@@ -614,6 +696,13 @@ class ImageReader:
 
         most_common_uid, _ = Counter(series_uids).most_common(1)[0]
         dicoms = [ds for ds in dicoms if getattr(ds, "SeriesInstanceUID", None) == most_common_uid]
+        # filter by modal IOP/Thickness in this series
+        files = [getattr(ds, 'filename', None) for ds in dicoms]
+        files = [f for f in files if f]
+        if files:
+            filtered_files = self._filter_files_by_iop_thickness(files)
+            if filtered_files:
+                dicoms = [ds for ds in dicoms if getattr(ds, 'filename', None) in set(filtered_files)]
 
         # Sort: InstanceNumber -> ImagePositionPatient[2]
         def sort_key(ds: pydicom.Dataset) -> float:
@@ -739,6 +828,13 @@ class ImageReader:
                 acq_groups.setdefault(key, []).append(ds)
             out[sid] = {}
             for acq, alist in acq_groups.items():
+                # filter by modal IOP/Thickness within this acquisition
+                alist_files = [getattr(ds, 'filename', None) for ds in alist]
+                alist_files = [f for f in alist_files if f]
+                if alist_files:
+                    filtered_files = self._filter_files_by_iop_thickness(alist_files)
+                    if filtered_files:
+                        alist = [ds for ds in alist if getattr(ds, 'filename', None) in set(filtered_files)]
                 alist.sort(key=sort_key)
                 # group by pixel array shape to avoid stacking mismatch
                 shape_groups = {}
@@ -766,8 +862,13 @@ class ImageReader:
         # volume: (H, W, D) -> SITK expects array (Z, Y, X)
         if volume.ndim == 2:
             img = sitk.GetImageFromArray(volume)
-        else:
+        elif volume.ndim == 3:
             img = sitk.GetImageFromArray(volume.transpose(2, 0, 1))
+        elif volume.ndim == 4:
+            # assume volume shape (H, W, D, T) -> SITK expects (T, D, H, W)
+            img = sitk.GetImageFromArray(volume.transpose(3, 2, 0, 1))
+        else:
+            raise ValueError(f"Unsupported volume ndim={volume.ndim}, shape={volume.shape}")
 
         # Spacing
         spacing_xy = [1.0, 1.0]
@@ -815,7 +916,7 @@ class ImageReader:
             except Exception:
                 fail += 1
 
-                
-
         if self.verbose:
             print(f"Metadata copied from pydicom first slice: {total - fail}/{total} succeeded.")
+
+        return image
