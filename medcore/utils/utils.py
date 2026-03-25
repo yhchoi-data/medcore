@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Optional, Sequence
 
 import matplotlib.colors as mcolors
@@ -9,7 +8,9 @@ import numpy as np
 import SimpleITK as sitk
 
 
-def make_cmap_from_base(label: np.ndarray, base_cmap: str = "tab10", alpha: float = 0.5) -> mcolors.ListedColormap:
+def make_cmap_from_base(
+    label: np.ndarray, base_cmap: str = "tab10", alpha: float = 0.5
+) -> mcolors.ListedColormap:
     label = np.asarray(label)
     max_label = int(label.max()) if label.size > 0 else 0
     num_classes = max_label + 1
@@ -39,7 +40,7 @@ def figure_overlay_label_on_slices(
         n_panels = len(labelname)
     else:
         n_panels = max(1, len(labels))
-        labelname = [f"Label {i+1}" for i in range(n_panels)]
+        labelname = [f"Label {i + 1}" for i in range(n_panels)]
 
     cmap = make_cmap_from_base(mask, base_cmap=color, alpha=alpha)
     fig, axes = plt.subplots(1, n_panels, figsize=(max(5, 3 * n_panels), 5))
@@ -132,7 +133,11 @@ def figure_slices_with_umbilicus(
     pos_z = int(np.clip(pos_z, 0, image.shape[2] - 1))
 
     mask = np.zeros(image.shape, dtype=int)
-    mask[max(0, pos_x - msize) : pos_x + msize, max(0, pos_y - msize) : pos_y + msize, max(0, pos_z - msize) : pos_z + msize] = 1
+    mask[
+        max(0, pos_x - msize) : pos_x + msize,
+        max(0, pos_y - msize) : pos_y + msize,
+        max(0, pos_z - msize) : pos_z + msize,
+    ] = 1
     cmap = make_cmap_from_base(mask, base_cmap=color, alpha=alpha)
 
     fig, axes = plt.subplots(1, 3, figsize=(12, 6))

@@ -1,10 +1,10 @@
 from .detect import (
-    get_median_slice_index,
+    LandmarkMaskGenerator,
+    UmbilicusDetector,
+    UmbilicusPredictor,
     get_coronal_plane_degree,
     get_longest_segment,
-    UmbilicusPredictor,
-    UmbilicusDetector,
-    LandmarkMaskGenerator,
+    get_median_slice_index,
 )
 
 __all__ = [
