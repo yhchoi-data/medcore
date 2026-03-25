@@ -28,7 +28,9 @@ def _label_names(labelfiles: LabelFiles) -> list[str]:
     return names
 
 
-def _to_table(labelfiles: LabelFiles, label_ids: np.ndarray, counts: np.ndarray, unit: float) -> pd.DataFrame:
+def _to_table(
+    labelfiles: LabelFiles, label_ids: np.ndarray, counts: np.ndarray, unit: float
+) -> pd.DataFrame:
     names = _label_names(labelfiles)
     table = pd.DataFrame(np.zeros(len(names), dtype=float), index=names, columns=["value"])
     valid = label_ids > 0
@@ -122,7 +124,9 @@ def _extract_patch_safe(
     if dx <= 0 or dy <= 0 or dz <= 0:
         return out
 
-    out[dst_x0 : dst_x0 + dx, dst_y0 : dst_y0 + dy, dst_z0 : dst_z0 + dz] = image[src_x0:src_x1, src_y0:src_y1, src_z0:src_z1]
+    out[dst_x0 : dst_x0 + dx, dst_y0 : dst_y0 + dy, dst_z0 : dst_z0 + dz] = image[
+        src_x0:src_x1, src_y0:src_y1, src_z0:src_z1
+    ]
     return out
 
 
@@ -143,9 +147,13 @@ def extract_patches_from_image(
     if grid_size * grid_size != n:
         raise ValueError("`points` length must be a perfect square (e.g., 25 for 5x5 grid).")
 
-    patches = np.zeros((grid_size * patch_size, middle_size, grid_size * patch_size), dtype=image.dtype)
+    patches = np.zeros(
+        (grid_size * patch_size, middle_size, grid_size * patch_size), dtype=image.dtype
+    )
     for idx, point in enumerate(points):
-        sub_patch = _extract_patch_safe(image, np.clip(point[:3], 0, None), patch_size, middle_size, delta)
+        sub_patch = _extract_patch_safe(
+            image, np.clip(point[:3], 0, None), patch_size, middle_size, delta
+        )
         is_idx = grid_size - 1 - (idx // grid_size)
         rl_idx = idx % grid_size
         patches[

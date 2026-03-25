@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import SimpleITK as sitk
 
-from ..utils.sitk_utils import sitk_get_array, sitk_resampler, sitk_copy_metainfo
+from ..utils.sitk_utils import sitk_copy_metainfo, sitk_get_array, sitk_resampler
 
 
 @dataclass(frozen=True)
@@ -44,7 +44,7 @@ def get_median_slice_index(mask, use_transverse_process=True):
         else:
             z_idx = int(np.median(coord_is))
     else:
-      z_idx = 0
+        z_idx = 0
 
     return z_idx
 
@@ -73,7 +73,7 @@ def get_coronal_plane_degree(volume: sitk.Image, margin: int = 150) -> float:
     """
     Estimate coronal plane angle (degrees) from body trunk principal axis.
     """
-    # 0. resample ISO-voxel 
+    # 0. resample ISO-voxel
     volume_iso = sitk_resampler(volume, new_spacing=(1.0, 1.0, 1.0))
     image = sitk_get_array(volume_iso, normalize=True)
 
@@ -102,7 +102,7 @@ def get_coronal_plane_degree(volume: sitk.Image, margin: int = 150) -> float:
 
     # 3. 몸통에 해당하는 픽셀 좌표 추출
     if mip.shape[0] - margin > 0:
-        coords = np.column_stack(np.where(mip[margin:,:] > 0))  # (y, x)
+        coords = np.column_stack(np.where(mip[margin:, :] > 0))  # (y, x)
     else:
         coords = np.column_stack(np.where(mip > 0))  # (y, x)
     if coords.shape[0] < 2:
@@ -174,7 +174,9 @@ class UmbilicusPredictor:
         ct = sitk.GetArrayFromImage(volume)
         spacing = np.asarray(volume.GetSpacing(), dtype=float)
         if spacing.shape[0] < 3:
-            raise ValueError("spacing must have 3 elements: [sy, sx, sz] or similar order used in your code")
+            raise ValueError(
+                "spacing must have 3 elements: [sy, sx, sz] or similar order used in your code"
+            )
 
         ct_proc = ct.copy() if copy else ct
         ct_proc = self._ct_windowing(ct_proc, self.window_min, self.window_max)
@@ -187,8 +189,10 @@ class UmbilicusPredictor:
                 ct_proc, spacing, kernel_size_mm=self.intensity_kernel_mm, roi=roi_eff
             )
 
-        points = pd.DataFrame([int(predicted[2]), int(predicted[1]), int(predicted[0])], index=['SI','AP','LR']).T
-        points['SCORE'] = score
+        points = pd.DataFrame(
+            [int(predicted[2]), int(predicted[1]), int(predicted[0])], index=["SI", "AP", "LR"]
+        ).T
+        points["SCORE"] = score
         return points
 
     # ---------------------------
@@ -243,7 +247,9 @@ class UmbilicusPredictor:
     # ---------------------------
     # Method 1: contour-based
     # ---------------------------
-    def _method_contour(self, ct: np.ndarray, spacing: np.ndarray, roi: ROI) -> Tuple[List[int], float]:
+    def _method_contour(
+        self, ct: np.ndarray, spacing: np.ndarray, roi: ROI
+    ) -> Tuple[List[int], float]:
         axial_crop = roi.axial
         coronal_crop = roi.coronal
         sagittal_crop = roi.sagittal
@@ -277,7 +283,9 @@ class UmbilicusPredictor:
             slice_mask[:, : sagittal_crop[0]] = 0
             slice_mask[:, sagittal_crop[1] :] = 0
 
-            simplified_contour = contour[np.array(slice_mask[contour[:, 1], contour[:, 0]], dtype=bool)]
+            simplified_contour = contour[
+                np.array(slice_mask[contour[:, 1], contour[:, 0]], dtype=bool)
+            ]
 
             scores: List[float] = []
             for i in range(1, len(simplified_contour) - 1):
@@ -298,7 +306,9 @@ class UmbilicusPredictor:
                     n3 = np.linalg.norm(l3)
                     if n3 != 0:
                         l3 = l3 / n3
-                        p = simplified_contour[i - 1] + l3 * np.dot(l3, simplified_contour[i] - simplified_contour[i - 1])
+                        p = simplified_contour[i - 1] + l3 * np.dot(
+                            l3, simplified_contour[i] - simplified_contour[i - 1]
+                        )
                         p = (p - simplified_contour[i]) * spacing[:2]
                         dist = float(np.linalg.norm(p) + np.sqrt(np.sum((l1 - l2) ** 2)))
 
@@ -383,9 +393,13 @@ class UmbilicusPredictor:
         # NOTE: Original code has a suspicious 'break' that exits only the innermost loop,
         # and uses c,s after break. We keep the structure but make it safer.
         for a in range(axial_crop[0], max(axial_crop[0], axial_crop[1] - kernel3d.shape[0])):
-            for s in range(sagittal_crop[0], max(sagittal_crop[0], sagittal_crop[1] - kernel3d.shape[2])):
+            for s in range(
+                sagittal_crop[0], max(sagittal_crop[0], sagittal_crop[1] - kernel3d.shape[2])
+            ):
                 c = None
-                for c in range(coronal_crop[0], max(coronal_crop[0], coronal_crop[1] - kernel3d.shape[1])):
+                for c in range(
+                    coronal_crop[0], max(coronal_crop[0], coronal_crop[1] - kernel3d.shape[1])
+                ):
                     if mask[a, c, s] != 0:
                         break  # keep original intent
 
@@ -425,9 +439,9 @@ class UmbilicusPredictor:
 class UmbilicusDetector:
     """
     Umbilicus (navel) detection class for medical images.
-    
+
     This class provides functionality to:
-    1. Find hole masks that may represent umbilicus 
+    1. Find hole masks that may represent umbilicus
     2. Detect umbilicus point from the mask
     3. Return anatomical coordinates
     """
@@ -437,7 +451,7 @@ class UmbilicusDetector:
 
         """
         Initialize the UmbilicusDetector.
-        
+
         Parameters
         ----------
 
@@ -464,14 +478,14 @@ class UmbilicusDetector:
             - width_start, width_end: width boundaries
             - depth_start, depth_end: depth boundaries
             - height_start, height_end: height boundaries
-            
+
         Returns
         -------
         pd.DataFrame
             Detected umbilicus points with columns:
             - SI, AP, LR: coordinates
             - MIN_CV: curvature
-            - MEAN_VAL: intensity values            
+            - MEAN_VAL: intensity values
         """
 
         self.region_image = region_image
@@ -484,7 +498,11 @@ class UmbilicusDetector:
         if contour_info.empty:
             return contour_info
 
-        basis = [region_info["height_start"], region_info["depth_start"], region_info["width_start"]]
+        basis = [
+            region_info["height_start"],
+            region_info["depth_start"],
+            region_info["width_start"],
+        ]
         points = contour_info[["SI", "AP", "LR"]] + basis
         points[["MIN_CV", "MEAN_VAL"]] = contour_info[["MIN_CV", "MEAN_VAL"]]
 
@@ -542,7 +560,11 @@ class UmbilicusDetector:
 
         min_idx = int(np.argmin(min_cv_list))
 
-        return float(min_cv_list[min_idx]), int(split_indices[min_idx]), int(split_indices[min_idx + 1] - 1)
+        return (
+            float(min_cv_list[min_idx]),
+            int(split_indices[min_idx]),
+            int(split_indices[min_idx + 1] - 1),
+        )
 
     def _compute_curvature(self, xy: np.ndarray) -> np.ndarray:
         x = xy[:, 1]
@@ -552,13 +574,17 @@ class UmbilicusDetector:
         ddx = np.gradient(dx)
         ddy = np.gradient(dy)
         numerator = dx * ddy - dy * ddx
-        denominator = (dx**2 + dy**2)**1.5 + 1e-8
+        denominator = (dx**2 + dy**2) ** 1.5 + 1e-8
         return numerator / denominator
 
 
 @dataclass(frozen=True)
 class GridConfig:
-    spacing_mm: Tuple[float, float, float] = (50.0, 50.0, 50.0)  # (z,y,x) or (??) -> 아래 코드의 vox 매핑 기준
+    spacing_mm: Tuple[float, float, float] = (
+        50.0,
+        50.0,
+        50.0,
+    )  # (z,y,x) or (??) -> 아래 코드의 vox 매핑 기준
     grid_size: int = 5
 
 
@@ -648,7 +674,11 @@ class LandmarkMaskGenerator:
 
         for i, lm_pos in enumerate(projected_points):
             z, y, x = lm_pos
-            if 0 <= z < landmark_mask.shape[0] and 0 <= y < landmark_mask.shape[1] and 0 <= x < landmark_mask.shape[2]:
+            if (
+                0 <= z < landmark_mask.shape[0]
+                and 0 <= y < landmark_mask.shape[1]
+                and 0 <= x < landmark_mask.shape[2]
+            ):
                 landmark_mask[z, y, x] = i + 1
 
         # NOTE: 아래 함수는 사용자가 이미 갖고 있다고 가정합니다.
@@ -775,4 +805,3 @@ class LandmarkMaskGenerator:
             raise TypeError("center must be a numpy array")
         if center.shape != (3,):
             raise ValueError("center must be shape (3,)")
-

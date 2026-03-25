@@ -1,7 +1,7 @@
 from .feature import (
+    compute_label_areas,
     compute_label_volumes,
     compute_label_volumns,
-    compute_label_areas,
     extract_patches_from_image,
 )
 

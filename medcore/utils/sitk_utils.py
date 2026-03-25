@@ -1,8 +1,11 @@
-from typing import Optional, Tuple, Sequence, List, Union, Mapping
-import SimpleITK as sitk
-import numpy as np
 from pathlib import Path
+from typing import List, Mapping, Optional, Sequence, Tuple, Union
+
+import numpy as np
+import SimpleITK as sitk
+
 from ..io.reader import ImageReader
+
 
 def sitk_write_nii(
     image: Union[sitk.Image, np.ndarray],
@@ -59,17 +62,14 @@ def sitk_write_nii(
     # --- case 2: NumPy array (reference REQUIRED) ---
     elif isinstance(image, np.ndarray):
         if reference is None:
-            raise ValueError(
-                "`reference` must be provided when image is a NumPy array."
-            )
+            raise ValueError("`reference` must be provided when image is a NumPy array.")
 
         sitk_img = sitk.GetImageFromArray(image)
         sitk_img.CopyInformation(reference)
 
     else:
         raise TypeError(
-            f"Unsupported image type: {type(image)}. "
-            "Expected sitk.Image or np.ndarray."
+            f"Unsupported image type: {type(image)}. Expected sitk.Image or np.ndarray."
         )
 
     sitk.WriteImage(sitk_img, str(output_path))
@@ -77,11 +77,12 @@ def sitk_write_nii(
     if verbose:
         print(f"Saved NIfTI: {output_path}")
 
+
 def sitk_get_array(
-        volume: sitk.Image,
-        norm_min: float = -1000,
-        norm_max: float = 500,
-        normalize: bool = False,
+    volume: sitk.Image,
+    norm_min: float = -1000,
+    norm_max: float = 500,
+    normalize: bool = False,
 ) -> np.ndarray:
     """
     Normalize CT image intensity (HU) to [0, 1] range.
@@ -101,15 +102,15 @@ def sitk_get_array(
         [0, 1] 범위로 정규화된 이미지 [0~0.2 / 0.2~0.6 / 0.6~1]
     """
 
-
     image = sitk.GetArrayFromImage(volume)
     if normalize == True:
         image_norm = np.clip(image, norm_min, norm_max)
-        image_norm = (image_norm - norm_min) / (norm_max-norm_min)
+        image_norm = (image_norm - norm_min) / (norm_max - norm_min)
 
         return image_norm
     else:
         return image
+
 
 def sitk_make_euler3dtransform(
     sitk_vol: sitk.Image,
@@ -140,7 +141,7 @@ def sitk_make_euler3dtransform(
         raise ValueError(f"Unknown axis: {axis}")
 
     # --- robust physical center ---
-    size = np.array(sitk_vol.GetSize(), dtype=np.float64)        # (x,y,z)
+    size = np.array(sitk_vol.GetSize(), dtype=np.float64)  # (x,y,z)
     spacing = np.array(sitk_vol.GetSpacing(), dtype=np.float64)
     origin = np.array(sitk_vol.GetOrigin(), dtype=np.float64)
     direction = np.array(sitk_vol.GetDirection(), dtype=np.float64).reshape(3, 3)
@@ -160,6 +161,7 @@ def sitk_make_euler3dtransform(
         transform.SetRotation(0.0, 0.0, rad)
 
     return transform.GetInverse() if inverse else transform
+
 
 def sitk_resampler(
     sitk_vol: sitk.Image,
@@ -238,6 +240,7 @@ def sitk_resampler(
         out_pixel_id,
     )
 
+
 def sitk_resample_point_between_volumes(
     point_zyx: Sequence[int],
     source_volume: sitk.Image,
@@ -295,7 +298,9 @@ def sitk_resample_point_between_volumes(
     mask[z0:z1, y0:y1, x0:x1] = 1
 
     # 2) Convert mask -> sitk and copy geometry from source
-    mask_img = sitk.GetImageFromArray(mask)  # creates (x,y,z) image internally, consistent with SITK
+    mask_img = sitk.GetImageFromArray(
+        mask
+    )  # creates (x,y,z) image internally, consistent with SITK
     mask_img.CopyInformation(source_volume)
 
     # 3) Resample into target grid using inverse transform (NN for mask)
@@ -304,10 +309,10 @@ def sitk_resample_point_between_volumes(
     # Use sitk.Resample directly (reference image defines output origin/dir/size/spacing)
     out = sitk.Resample(
         mask_img,
-        target_volume,                # reference image defines grid
+        target_volume,  # reference image defines grid
         inv_t,
         sitk.sitkNearestNeighbor,
-        0,                            # default pixel for outside
+        0,  # default pixel for outside
         sitk.sitkUInt8,
     )
 
@@ -322,6 +327,7 @@ def sitk_resample_point_between_volumes(
 
     mapped_zyx = np.median(np.vstack(idx), axis=1).astype(int).tolist()
     return mapped_zyx
+
 
 def sitk_read_labelfiles(labelfiles: Mapping[int, Union[str, Path]]) -> sitk.Image:
     """
@@ -354,9 +360,10 @@ def sitk_read_labelfiles(labelfiles: Mapping[int, Union[str, Path]]) -> sitk.Ima
 
     return combined
 
+
 def sitk_copy_metainfo(volume: sitk.Image, image: np.ndarray) -> sitk.Image:
     """
-    sitk 이미지 → numpy 처리 → sitk 복원 
+    sitk 이미지 → numpy 처리 → sitk 복원
 
     Parameters:
     -----------
@@ -371,5 +378,5 @@ def sitk_copy_metainfo(volume: sitk.Image, image: np.ndarray) -> sitk.Image:
         처리된 sitk 이미지
     """
     processed_volume = sitk.GetImageFromArray(image)
-    processed_volume.CopyInformation(volume)                # 메타데이터 복사
+    processed_volume.CopyInformation(volume)  # 메타데이터 복사
     return processed_volume
