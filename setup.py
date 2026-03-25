@@ -8,9 +8,11 @@ setup(
     name="medcore",
     version=version_ns["__version__"],
     description="Medical imaging utilities based on SimpleITK",
-    long_description=open("README.md", "r", encoding="utf-8").read()
-    if __import__("os").path.exists("README.md")
-    else "",
+    long_description=(
+        open("README.md", "r", encoding="utf-8").read()
+        if __import__("os").path.exists("README.md")
+        else ""
+    ),
     long_description_content_type="text/markdown",
     author="yongho choi",
     author_email="yhchoi@hutom.co.kr",
@@ -30,6 +32,7 @@ setup(
     ],
     extras_require={
         "dev": [
+            "black>=24.0",
             "pre-commit>=4.0",
             "pytest>=8.0",
             "ruff>=0.11.0",

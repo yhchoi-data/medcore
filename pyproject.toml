@@ -17,7 +17,6 @@ extend-exclude = ["test.ipynb"]
 select = ["F", "I"]
 ignore = ["F401", "F841"]
 
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-line-ending = "lf"
+[tool.black]
+line-length = 100
+target-version = ["py311"]
