@@ -1,8 +1,4 @@
-from .segment import (
-    TorsoSegmenter,
-    AbdomenSegmenter,
-)
-
+from .segment import AbdomenSegmenter, TorsoSegmenter
 
 __all__ = [
     "TorsoSegmenter",

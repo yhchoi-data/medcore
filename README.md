@@ -26,6 +26,13 @@ cd medcore
 pip install .
 ```
 
+### From source (developer mode)
+```bash
+git clone https://github.com/yhchoi-data/medcore.git
+cd medcore
+pip install -e ".[dev]"
+```
+
 ### From pypi [to be updated]
 ```bash
 pip install medcore
@@ -65,3 +72,11 @@ from medcore.feature import compute_label_areas, compute_label_volumes
 
 ## Documentation
 Detailed examples are in [USAGE.md](USAGE.md).
+
+## Developer workflow
+
+```bash
+pre-commit run --all-files
+```
+
+On the first run, some hooks may show `Failed` because they automatically fix files such as trailing whitespace or formatting. That is normal. Run `pre-commit run --all-files` once more and it should pass after the auto-fixes are applied.

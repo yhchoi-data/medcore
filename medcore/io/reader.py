@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from collections import Counter
 from pathlib import Path
-from typing import Optional, Tuple, Union, List, Dict, Any
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -31,13 +31,15 @@ class ImageReader:
         verbose: bool = False,
         target_orientation: str = "LPS",  # "LPS" or "RAS"
         # --- DICOM series selection options ---
-        prefer_modality: Optional[str] = None,                  # e.g. "CT", "MR"
-        include_series_description: Optional[List[str]] = None,  # AND keywords, e.g. ["lung", "thorax"]
+        prefer_modality: Optional[str] = None,  # e.g. "CT", "MR"
+        include_series_description: Optional[
+            List[str]
+        ] = None,  # AND keywords, e.g. ["lung", "thorax"]
         exclude_series_description: Optional[List[str]] = None,  # e.g. ["localizer", "scout"]
-        prefer_body_part: Optional[List[str]] = None,           # e.g. ["CHEST", "LUNG"]
+        prefer_body_part: Optional[List[str]] = None,  # e.g. ["CHEST", "LUNG"]
         # --- Thin-slice preference ---
         prefer_thin_slice: bool = True,
-        max_slice_thickness_mm: Optional[float] = None,          # hard filter if thickness known (e.g. 5.0)
+        max_slice_thickness_mm: Optional[float] = None,  # hard filter if thickness known (e.g. 5.0)
         read_all_acquisitions: bool = False,
         read_all_series: bool = False,
     ) -> None:
@@ -67,11 +69,15 @@ class ImageReader:
                 for k, v in self.sitk_volume.items():
                     if isinstance(v, dict):
                         out[k] = {
-                            kk: self.standardize_orientation(vv, target_orientation=self.target_orientation)
+                            kk: self.standardize_orientation(
+                                vv, target_orientation=self.target_orientation
+                            )
                             for kk, vv in v.items()
                         }
                     else:
-                        out[k] = self.standardize_orientation(v, target_orientation=self.target_orientation)
+                        out[k] = self.standardize_orientation(
+                            v, target_orientation=self.target_orientation
+                        )
                 self.sitk_volume = out
             else:
                 self.sitk_volume = self.standardize_orientation(
@@ -210,14 +216,13 @@ class ImageReader:
     # Load pipeline
     # -------------------------
     def load_medical_image(self, input_path: Path) -> sitk.Image:
-
         if input_path.is_file():
             has_nifti = self._is_nifti_file(input_path)
             if has_nifti:
                 return self._load_nifti(input_path)
             else:
                 raise ValueError(f"Check File: {input_path}")
-            
+
         if input_path.is_dir():
             files = [p for p in input_path.iterdir() if p.is_file()]
             nifti_files = [p for p in files if self._is_nifti_file(p)]
@@ -259,7 +264,7 @@ class ImageReader:
                     print("Detected DICOM-only directory.")
                 return self._load_dicom_folder(input_path)
 
-            # 4) 섞여 있음 (NIfTI + DICOM) 기본은 error 권장. 필요시 정책으로 선택 
+            # 4) 섞여 있음 (NIfTI + DICOM) 기본은 error 권장. 필요시 정책으로 선택
             if has_dicom and has_nifti:
                 raise ValueError(
                     f"Mixed directory (NIfTI + DICOM) is not allowed: {input_path}\n"
@@ -280,7 +285,7 @@ class ImageReader:
             return True
         except Exception:
             return False
-        
+
     def _load_nifti(self, folder: Path) -> sitk.Image:
         name = folder.name.lower()
         if not (name.endswith(".nii") or name.endswith(".nii.gz")):
@@ -302,7 +307,9 @@ class ImageReader:
             return img
         except Exception as e:
             if self.verbose:
-                print(f"[WARN] SimpleITK series read failed, fallback to pydicom stacking. Reason: {e}")
+                print(
+                    f"[WARN] SimpleITK series read failed, fallback to pydicom stacking. Reason: {e}"
+                )
 
         # 2) Fallback to pydicom stacking (single best series by UID)
         try:
@@ -326,7 +333,9 @@ class ImageReader:
                     img = self._attach_dicom_metadata(img, first_ds)
                     images[acq] = img
                 if self.verbose:
-                    print(f"Loaded DICOM via pydicom stacking fallback (acquisitions={len(images)})")
+                    print(
+                        f"Loaded DICOM via pydicom stacking fallback (acquisitions={len(images)})"
+                    )
                 return images
             volume, first_ds = self.dcmread_series(str(folder))
             img = self.array2sitk(volume, first_ds)
@@ -495,9 +504,7 @@ class ImageReader:
     # -------------------------
     # DICOM series selection (filter + scoring)
     # -------------------------
-    def _select_best_series_files(
-        self, folder: Path, series_ids: List[str]
-    ) -> Optional[List[str]]:
+    def _select_best_series_files(self, folder: Path, series_ids: List[str]) -> Optional[List[str]]:
         candidates = []
 
         for sid in series_ids:
@@ -590,16 +597,16 @@ class ImageReader:
                 ds = pydicom.dcmread(f, stop_before_pixels=True, force=True)
             except Exception:
                 continue
-            acq = getattr(ds, 'AcquisitionNumber', None)
-            key = str(acq) if acq is not None else 'NA'
+            acq = getattr(ds, "AcquisitionNumber", None)
+            key = str(acq) if acq is not None else "NA"
             # Sort by InstanceNumber or ImagePositionPatient[2]
             sort_val = 0.0
-            if hasattr(ds, 'InstanceNumber'):
+            if hasattr(ds, "InstanceNumber"):
                 try:
                     sort_val = float(ds.InstanceNumber)
                 except Exception:
                     pass
-            elif hasattr(ds, 'ImagePositionPatient'):
+            elif hasattr(ds, "ImagePositionPatient"):
                 try:
                     sort_val = float(ds.ImagePositionPatient[2])
                 except Exception:
@@ -622,8 +629,8 @@ class ImageReader:
                 ds = pydicom.dcmread(f, stop_before_pixels=True, force=True)
             except Exception:
                 continue
-            iop = getattr(ds, 'ImageOrientationPatient', None)
-            thk = getattr(ds, 'SliceThickness', None)
+            iop = getattr(ds, "ImageOrientationPatient", None)
+            thk = getattr(ds, "SliceThickness", None)
             iop_key = None
             if iop is not None:
                 try:
@@ -752,12 +759,14 @@ class ImageReader:
         most_common_uid, _ = Counter(series_uids).most_common(1)[0]
         dicoms = [ds for ds in dicoms if getattr(ds, "SeriesInstanceUID", None) == most_common_uid]
         # filter by modal IOP/Thickness in this series
-        files = [getattr(ds, 'filename', None) for ds in dicoms]
+        files = [getattr(ds, "filename", None) for ds in dicoms]
         files = [f for f in files if f]
         if files:
             filtered_files = self._filter_files_by_iop_thickness(files)
             if filtered_files:
-                dicoms = [ds for ds in dicoms if getattr(ds, 'filename', None) in set(filtered_files)]
+                dicoms = [
+                    ds for ds in dicoms if getattr(ds, "filename", None) in set(filtered_files)
+                ]
 
         # Sort: InstanceNumber -> ImagePositionPatient[2]
         def sort_key(ds: pydicom.Dataset) -> float:
@@ -784,35 +793,37 @@ class ImageReader:
 
         return volume, dicoms[0]
 
-    def dcmread_series_grouped(self, folder_path: str) -> Dict[str, Tuple[np.ndarray, pydicom.Dataset]]:
+    def dcmread_series_grouped(
+        self, folder_path: str
+    ) -> Dict[str, Tuple[np.ndarray, pydicom.Dataset]]:
         files = [os.path.join(folder_path, f) for f in os.listdir(folder_path)]
         dicoms = []
 
         for f in files:
             try:
                 ds = pydicom.dcmread(f, force=True)
-                if hasattr(ds, 'PixelData'):
+                if hasattr(ds, "PixelData"):
                     dicoms.append(ds)
             except Exception:
                 continue
 
         if len(dicoms) == 0:
-            raise RuntimeError('No valid DICOM files found in folder.')
+            raise RuntimeError("No valid DICOM files found in folder.")
 
-        series_uids = [ds.SeriesInstanceUID for ds in dicoms if hasattr(ds, 'SeriesInstanceUID')]
+        series_uids = [ds.SeriesInstanceUID for ds in dicoms if hasattr(ds, "SeriesInstanceUID")]
         if not series_uids:
-            raise RuntimeError('No SeriesInstanceUID found in DICOM files.')
+            raise RuntimeError("No SeriesInstanceUID found in DICOM files.")
 
         most_common_uid, _ = Counter(series_uids).most_common(1)[0]
-        dicoms = [ds for ds in dicoms if getattr(ds, 'SeriesInstanceUID', None) == most_common_uid]
+        dicoms = [ds for ds in dicoms if getattr(ds, "SeriesInstanceUID", None) == most_common_uid]
 
         def sort_key(ds: pydicom.Dataset) -> float:
-            if hasattr(ds, 'InstanceNumber'):
+            if hasattr(ds, "InstanceNumber"):
                 try:
                     return float(ds.InstanceNumber)
                 except Exception:
                     pass
-            if hasattr(ds, 'ImagePositionPatient'):
+            if hasattr(ds, "ImagePositionPatient"):
                 try:
                     return float(ds.ImagePositionPatient[2])
                 except Exception:
@@ -821,8 +832,8 @@ class ImageReader:
 
         groups: Dict[str, List[pydicom.Dataset]] = {}
         for ds in dicoms:
-            acq = getattr(ds, 'AcquisitionNumber', None)
-            key = str(acq) if acq is not None else 'NA'
+            acq = getattr(ds, "AcquisitionNumber", None)
+            key = str(acq) if acq is not None else "NA"
             groups.setdefault(key, []).append(ds)
 
         out: Dict[str, Tuple[np.ndarray, pydicom.Dataset]] = {}
@@ -831,43 +842,45 @@ class ImageReader:
             slices = [d.pixel_array for d in lst]
             volume = np.stack(slices, axis=-1).astype(np.float32)
 
-            intercept = float(lst[0].get('RescaleIntercept', 0.0))
-            slope = float(lst[0].get('RescaleSlope', 1.0))
+            intercept = float(lst[0].get("RescaleIntercept", 0.0))
+            slope = float(lst[0].get("RescaleSlope", 1.0))
             volume = volume * slope + intercept
 
             out[k] = (volume, lst[0])
 
         return out
 
-    def dcmread_series_grouped_by_series(self, folder_path: str) -> Dict[str, Dict[str, Tuple[np.ndarray, pydicom.Dataset]]]:
+    def dcmread_series_grouped_by_series(
+        self, folder_path: str
+    ) -> Dict[str, Dict[str, Tuple[np.ndarray, pydicom.Dataset]]]:
         files = [os.path.join(folder_path, f) for f in os.listdir(folder_path)]
         dicoms = []
 
         for f in files:
             try:
                 ds = pydicom.dcmread(f, force=True)
-                if hasattr(ds, 'PixelData'):
+                if hasattr(ds, "PixelData"):
                     dicoms.append(ds)
             except Exception:
                 continue
 
         if len(dicoms) == 0:
-            raise RuntimeError('No valid DICOM files found in folder.')
+            raise RuntimeError("No valid DICOM files found in folder.")
 
         groups_by_series: Dict[str, List[pydicom.Dataset]] = {}
         for ds in dicoms:
-            sid = getattr(ds, 'SeriesInstanceUID', None)
+            sid = getattr(ds, "SeriesInstanceUID", None)
             if sid is None:
                 continue
             groups_by_series.setdefault(str(sid), []).append(ds)
 
         def sort_key(ds: pydicom.Dataset) -> float:
-            if hasattr(ds, 'InstanceNumber'):
+            if hasattr(ds, "InstanceNumber"):
                 try:
                     return float(ds.InstanceNumber)
                 except Exception:
                     pass
-            if hasattr(ds, 'ImagePositionPatient'):
+            if hasattr(ds, "ImagePositionPatient"):
                 try:
                     return float(ds.ImagePositionPatient[2])
                 except Exception:
@@ -878,18 +891,22 @@ class ImageReader:
         for sid, lst in groups_by_series.items():
             acq_groups: Dict[str, List[pydicom.Dataset]] = {}
             for ds in lst:
-                acq = getattr(ds, 'AcquisitionNumber', None)
-                key = str(acq) if acq is not None else 'NA'
+                acq = getattr(ds, "AcquisitionNumber", None)
+                key = str(acq) if acq is not None else "NA"
                 acq_groups.setdefault(key, []).append(ds)
             out[sid] = {}
             for acq, alist in acq_groups.items():
                 # filter by modal IOP/Thickness within this acquisition
-                alist_files = [getattr(ds, 'filename', None) for ds in alist]
+                alist_files = [getattr(ds, "filename", None) for ds in alist]
                 alist_files = [f for f in alist_files if f]
                 if alist_files:
                     filtered_files = self._filter_files_by_iop_thickness(alist_files)
                     if filtered_files:
-                        alist = [ds for ds in alist if getattr(ds, 'filename', None) in set(filtered_files)]
+                        alist = [
+                            ds
+                            for ds in alist
+                            if getattr(ds, "filename", None) in set(filtered_files)
+                        ]
                 alist.sort(key=sort_key)
                 # group by pixel array shape to avoid stacking mismatch
                 shape_groups = {}
@@ -906,8 +923,8 @@ class ImageReader:
                 alist2.sort(key=sort_key)
                 slices = [d.pixel_array for d in alist2]
                 volume = np.stack(slices, axis=-1).astype(np.float32)
-                intercept = float(alist2[0].get('RescaleIntercept', 0.0))
-                slope = float(alist2[0].get('RescaleSlope', 1.0))
+                intercept = float(alist2[0].get("RescaleIntercept", 0.0))
+                slope = float(alist2[0].get("RescaleSlope", 1.0))
                 volume = volume * slope + intercept
                 out[sid][acq] = (volume, alist2[0])
         return out
