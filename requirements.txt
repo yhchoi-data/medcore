@@ -9,6 +9,7 @@ scikit-image==0.25.2
 scipy==1.15.2
 
 # Development tooling
+black==24.10.0
 pre-commit==4.2.0
 pytest==8.3.5
 ruff==0.11.13
