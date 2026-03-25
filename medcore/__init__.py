@@ -1,3 +1,4 @@
+from ._version import __version__
 from .detect import (
     LandmarkMaskGenerator,
     UmbilicusDetector,
@@ -32,6 +33,7 @@ from .utils import (
 )
 
 __all__ = [
+    "__version__",
     "ImageReader",
     "sitk_write_nii",
     "sitk_get_array",
