@@ -1,3 +1,5 @@
+import pandas as pd
+
 from ._version import __version__
 from .detect import (
     LandmarkMaskGenerator,
@@ -11,6 +13,7 @@ from .feature import (
     compute_label_areas,
     compute_label_volumes,
     compute_label_volumns,
+    extract_abdominal_body_composition_metrics,
     extract_patches_from_image,
 )
 from .io.reader import ImageReader
@@ -21,6 +24,8 @@ from .segment import (
 from .utils import (
     figure_overlay_label_on_slices,
     figure_overlay_label_reference_slice,
+    figure_overlay_tissue_on_slices,
+    figure_patch_from_image,
     figure_slices_with_landmarks,
     figure_slices_with_umbilicus,
     sitk_copy_metainfo,
@@ -31,6 +36,8 @@ from .utils import (
     sitk_resampler,
     sitk_write_nii,
 )
+
+pd.set_option("display.float_format", "{:.4f}".format)
 
 __all__ = [
     "__version__",
@@ -53,9 +60,12 @@ __all__ = [
     "compute_label_volumes",
     "compute_label_volumns",
     "compute_label_areas",
+    "extract_abdominal_body_composition_metrics",
     "extract_patches_from_image",
+    "figure_overlay_tissue_on_slices",
     "figure_overlay_label_on_slices",
     "figure_overlay_label_reference_slice",
+    "figure_patch_from_image",
     "figure_slices_with_umbilicus",
     "figure_slices_with_landmarks",
 ]

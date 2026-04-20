@@ -34,28 +34,64 @@ def figure_overlay_label_on_slices(
 ) -> None:
     image = sitk.GetArrayFromImage(volume)
     mask = sitk.GetArrayFromImage(label)
+    if image.shape != mask.shape:
+        raise ValueError("`volume` and `label` must have the same shape.")
+    if image.ndim != 3:
+        raise ValueError("`volume` and `label` must have shape (X, Y, Z).")
 
     labels = [int(v) for v in np.unique(mask) if v > 0]
-    if labelname is not None and len(labelname) > 0:
-        n_panels = len(labelname)
-    else:
-        n_panels = max(1, len(labels))
-        labelname = [f"Label {i + 1}" for i in range(n_panels)]
-
     cmap = make_cmap_from_base(mask, base_cmap=color, alpha=alpha)
-    fig, axes = plt.subplots(1, n_panels, figsize=(max(5, 3 * n_panels), 5))
-    axes = np.atleast_1d(axes)
     vmin, vmax = float(image.min()), float(image.max())
 
-    for i in range(n_panels):
-        target = i + 1
-        idx_is = np.where(mask == target)[0]
-        sl_idx = int(np.median(idx_is)) if idx_is.size > 0 else int(image.shape[0] / 2)
-        axes[i].imshow(image[sl_idx], vmin=vmin, vmax=vmax, cmap="gray")
-        if idx_is.size > 0:
+    if len(labels) <= 1:
+        coords = np.argwhere(mask > 0)
+        if coords.size > 0:
+            center = np.median(coords, axis=0).astype(int)
+        else:
+            center = np.array(image.shape) // 2
+
+        x_idx = int(np.clip(center[0], 0, image.shape[0] - 1))
+        y_idx = int(np.clip(center[1], 0, image.shape[1] - 1))
+        z_idx = int(np.clip(center[2], 0, image.shape[2] - 1))
+
+        fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+        axes = np.atleast_1d(axes)
+
+        axes[0].imshow(image[x_idx, :, :], vmin=vmin, vmax=vmax, cmap="gray")
+        axes[0].imshow(mask[x_idx, :, :], cmap=cmap)
+        axes[0].set_title(f"X slice {x_idx}")
+
+        axes[1].imshow(image[:, y_idx, :], vmin=vmin, vmax=vmax, cmap="gray")
+        axes[1].imshow(mask[:, y_idx, :], cmap=cmap)
+        axes[1].set_title(f"Y slice {y_idx}")
+
+        axes[2].imshow(image[:, :, z_idx], vmin=vmin, vmax=vmax, cmap="gray")
+        axes[2].imshow(mask[:, :, z_idx], cmap=cmap)
+        axes[2].set_title(f"Z slice {z_idx}")
+
+        for ax in axes:
+            ax.axis("off")
+    else:
+        target_labels = labels
+        n_panels = len(target_labels)
+        if labelname is None or len(labelname) == 0:
+            titles = [f"Label {target}" for target in target_labels]
+        else:
+            titles = [
+                labelname[i] if i < len(labelname) else f"Label {target}"
+                for i, target in enumerate(target_labels)
+            ]
+
+        fig, axes = plt.subplots(1, n_panels, figsize=(max(5, 3 * n_panels), 5))
+        axes = np.atleast_1d(axes)
+
+        for i, target in enumerate(target_labels):
+            idx_is = np.where(mask == target)[0]
+            sl_idx = int(np.median(idx_is)) if idx_is.size > 0 else int(image.shape[0] / 2)
+            axes[i].imshow(image[sl_idx], vmin=vmin, vmax=vmax, cmap="gray")
             axes[i].imshow(mask[sl_idx] == target, cmap=cmap)
-        axes[i].set_title(labelname[i] if i < len(labelname) else f"Label {target}")
-        axes[i].axis("off")
+            axes[i].set_title(titles[i])
+            axes[i].axis("off")
 
     plt.tight_layout()
     if save_path:
@@ -203,6 +239,77 @@ def figure_slices_with_landmarks(
     plt.suptitle("Landmark position")
     if save_dir:
         plt.savefig(str(save_dir))
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+
+def figure_overlay_tissue_on_slices(
+    image: np.ndarray,
+    mask: np.ndarray,
+    color: str = "tab10",
+    alpha: float = 0.25,
+    show: bool = True,
+    save_path: Optional[str] = None,
+) -> None:
+    image = np.asarray(image)
+    mask = np.asarray(mask)
+    if image.shape != mask.shape:
+        raise ValueError("`image` and `mask` must have the same shape.")
+    if image.ndim != 3:
+        raise ValueError("`image` and `mask` must have shape (N, H, W).")
+
+    n_slices = min(5, image.shape[0])
+    cmap = make_cmap_from_base(mask, base_cmap=color, alpha=alpha)
+    fig, axes = plt.subplots(1, n_slices, figsize=(3 * n_slices, 3))
+    axes = np.atleast_1d(axes)
+    vmin, vmax = float(image.min()), float(image.max())
+
+    for i in range(n_slices):
+        axes[i].imshow(image[i], vmin=vmin, vmax=vmax, cmap="gray")
+        axes[i].imshow(mask[i], cmap=cmap)
+        axes[i].axis("off")
+
+    fig.suptitle("Body Compositions [Fat/Muscle]", fontsize=15)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    if save_path:
+        plt.savefig(str(save_path))
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+
+def figure_patch_from_image(
+    patch: np.ndarray,
+    show: bool = True,
+    save_path: Optional[str] = None,
+) -> None:
+    patch = np.asarray(patch)
+    if patch.ndim != 3:
+        raise ValueError("`patch` must have shape (D, H, W).")
+
+    fig, axes = plt.subplots(3, 2, figsize=(15, 8))
+    axes = axes.ravel()
+    vmin, vmax = float(patch.min()), float(patch.max())
+
+    if patch.shape[0] >= 250:
+        sl_idx = [0, 50, 100, 150, 200, 249]
+    else:
+        sl_idx = np.linspace(0, patch.shape[0] - 1, 6, dtype=int).tolist()
+
+    for i, idx in enumerate(sl_idx):
+        axes[i].imshow(patch[idx], vmin=vmin, vmax=vmax, cmap="gray")
+        axes[i].set_title(f"slice_index = {idx}")
+        axes[i].axis("off")
+
+    d, h, w = patch.shape
+    fig.suptitle(f"Patch [size {d} * {h} * {w}]", fontsize=20)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+    if save_path:
+        plt.savefig(str(save_path))
     if show:
         plt.show()
     else:
