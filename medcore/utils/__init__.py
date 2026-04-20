@@ -10,6 +10,8 @@ from .sitk_utils import (
 from .utils import (
     figure_overlay_label_on_slices,
     figure_overlay_label_reference_slice,
+    figure_overlay_tissue_on_slices,
+    figure_patch_from_image,
     figure_slices_with_landmarks,
     figure_slices_with_umbilicus,
     make_cmap_from_base,
@@ -24,8 +26,10 @@ __all__ = [
     "sitk_read_labelfiles",
     "sitk_copy_metainfo",
     "make_cmap_from_base",
+    "figure_overlay_tissue_on_slices",
     "figure_overlay_label_on_slices",
     "figure_overlay_label_reference_slice",
+    "figure_patch_from_image",
     "figure_slices_with_umbilicus",
     "figure_slices_with_landmarks",
 ]

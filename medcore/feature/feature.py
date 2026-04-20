@@ -3,9 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping, Sequence, Tuple, Union
 
+import cv2
 import numpy as np
 import pandas as pd
 import SimpleITK as sitk
+from skimage import measure
 
 from ..utils.sitk_utils import sitk_read_labelfiles, sitk_resampler
 
@@ -16,6 +18,7 @@ __all__ = [
     "compute_label_volumes",
     "compute_label_volumns",
     "compute_label_areas",
+    "extract_abdominal_body_composition_metrics",
     "extract_patches_from_image",
 ]
 
@@ -162,3 +165,62 @@ def extract_patches_from_image(
             rl_idx * patch_size : (rl_idx + 1) * patch_size,
         ] = sub_patch
     return patches
+
+
+def extract_abdominal_body_composition_metrics(
+    slice_mask: np.ndarray,
+    tissue_mask: np.ndarray,
+    pixel_spacing: Tuple[float, float, float],
+) -> dict[str, float]:
+    slice_mask = np.asarray(slice_mask)
+    tissue_mask = np.asarray(tissue_mask)
+
+    if slice_mask.ndim != 2 or tissue_mask.ndim != 2:
+        raise ValueError("`slice_mask` and `tissue_mask` must be 2D arrays.")
+    if slice_mask.shape != tissue_mask.shape:
+        raise ValueError("`slice_mask` and `tissue_mask` must have the same shape.")
+
+    labeled = measure.label(slice_mask > 0)
+    props = measure.regionprops(labeled)
+    if not props:
+        raise ValueError("No connected component found in `slice_mask`.")
+
+    largest = max(props, key=lambda prop: prop.area)
+    cy, cx = largest.centroid
+    cx = int(round(cx))
+    cy = int(round(cy))
+
+    row_vals = np.where(slice_mask[cy, :] > 0)[0]
+    width_px = int(row_vals.max() - row_vals.min() + 1) if len(row_vals) > 0 else 0
+    tad_mm = width_px * pixel_spacing[0]
+
+    col_vals = np.where(slice_mask[:, cx] > 0)[0]
+    height_px = int(col_vals.max() - col_vals.min() + 1) if len(col_vals) > 0 else 0
+    sad_mm = height_px * pixel_spacing[1]
+
+    binary_mask = (slice_mask > 0).astype(np.uint8)
+    contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if len(contours) == 0:
+        raise ValueError("No contour found in `slice_mask`.")
+
+    contour = max(contours, key=cv2.contourArea)
+    pts = contour[:, 0, :].astype(np.float64)
+    pts_mm = np.zeros_like(pts, dtype=np.float64)
+    pts_mm[:, 0] = pts[:, 0] * pixel_spacing[0]
+    pts_mm[:, 1] = pts[:, 1] * pixel_spacing[1]
+
+    diffs = np.diff(np.vstack([pts_mm, pts_mm[0]]), axis=0)
+    perimeter_mm = float(np.sum(np.sqrt((diffs**2).sum(axis=1))))
+
+    pixel_area_mm2 = pixel_spacing[0] * pixel_spacing[1]
+    muscle_area_mm2 = float(np.sum(tissue_mask == 1) * pixel_area_mm2)
+    fat_area_mm2 = float(np.sum(tissue_mask == 2) * pixel_area_mm2)
+
+    return {
+        "MA_cm2": muscle_area_mm2 / 100.0,
+        "SFA_cm2": fat_area_mm2 / 100.0,
+        "perimeter_cm": perimeter_mm / 10.0,
+        "TAD_cm": tad_mm / 10.0,
+        "SAD_cm": sad_mm / 10.0,
+        "Ratio": float(tad_mm / sad_mm) if sad_mm > 0 else np.nan,
+    }
