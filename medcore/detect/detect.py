@@ -510,7 +510,7 @@ class UmbilicusDetector:
 
     def extract_region_contour_information(self) -> pd.DataFrame:
         contours = self.region_contour.copy()
-        image = self.region_image.copy()
+        image = self.region_image.copy() * self.region_mask.copy()
 
         contour_info = []
         for i in range(2, len(contours) - 2):

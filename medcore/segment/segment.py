@@ -57,9 +57,16 @@ class TorsoSegmenter:
         self,
         volume: sitk.Image,
         return_image: bool = False,
+        lower_abdomen_cutoff: float | None = None,
+        lower_abdomen_margin_mm: float = 100,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+
         # Step 0
         image = sitk_get_array(volume, normalize=True)
+        if lower_abdomen_cutoff is not None:
+            margin_idx = int(lower_abdomen_margin_mm / volume.GetSpacing()[2])
+            cutoff_idx = max(0, int(lower_abdomen_cutoff - margin_idx))
+            image[:cutoff_idx] = 0
 
         # Step 1: Create initial mask
         initial_mask = self._create_initial_mask(image)

@@ -380,3 +380,53 @@ def sitk_copy_metainfo(volume: sitk.Image, image: np.ndarray) -> sitk.Image:
     processed_volume = sitk.GetImageFromArray(image)
     processed_volume.CopyInformation(volume)  # 메타데이터 복사
     return processed_volume
+
+
+def sitk_to_nib_affine(volume: sitk.Image, verbose: bool = False) -> np.ndarray:
+    """
+    Convert SimpleITK image geometry to a nibabel-compatible affine.
+
+    SimpleITK uses LPS physical coordinates, so the affine built from spacing,
+    origin, and direction is converted from LPS to RAS before returning.
+
+    Parameters
+    ----------
+    volume : sitk.Image
+        Input SimpleITK image. Its spacing, origin, and direction are used.
+    verbose : bool, default=False
+        If True, print the SimpleITK orientation string inferred from
+        ``volume.GetDirection()``.
+
+    Returns
+    -------
+    np.ndarray
+        A 4x4 affine matrix compatible with nibabel, e.g. usable as input to
+        ``nib.aff2axcodes(affine)`` or ``nib.Nifti1Image(array_xyz, affine)``.
+
+    Notes
+    -----
+    ``sitk.GetArrayFromImage(volume)`` returns data in ``(z, y, x)`` order.
+    If creating a nibabel image, transpose the array to ``(x, y, z)`` before
+    pairing it with the returned affine.
+    """
+
+    spacing = np.array(volume.GetSpacing(), dtype=float)  # x, y, z
+    origin = np.array(volume.GetOrigin(), dtype=float)  # LPS
+    direction = np.array(volume.GetDirection(), dtype=float).reshape(3, 3)
+
+    affine_lps = np.eye(4)
+    affine_lps[:3, :3] = direction @ np.diag(spacing)
+    affine_lps[:3, 3] = origin
+
+    # Convert the affine's world coordinate convention from LPS to RAS
+    # so nibabel.aff2axcodes interprets it correctly.
+    lps_to_ras = np.diag([-1, -1, 1, 1])
+    affine_ras = lps_to_ras @ affine_lps
+
+    if verbose == True:
+        sitk_orient = sitk.DICOMOrientImageFilter_GetOrientationFromDirectionCosines(
+            volume.GetDirection()
+        )
+        print("Oritentation[sitk]:", sitk_orient)
+
+    return affine_ras
