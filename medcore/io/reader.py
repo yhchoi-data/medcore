@@ -591,7 +591,7 @@ class ImageReader:
         return files
 
     def _group_files_by_acquisition(self, files: List[str]) -> Dict[str, List[str]]:
-        groups: Dict[str, List[tuple[float, str]]] = {}
+        groups: Dict[str, List[tuple[Tuple[int, float], str]]] = {}
         for f in files:
             try:
                 ds = pydicom.dcmread(f, stop_before_pixels=True, force=True)
@@ -599,18 +599,7 @@ class ImageReader:
                 continue
             acq = getattr(ds, "AcquisitionNumber", None)
             key = str(acq) if acq is not None else "NA"
-            # Sort by InstanceNumber or ImagePositionPatient[2]
-            sort_val = 0.0
-            if hasattr(ds, "InstanceNumber"):
-                try:
-                    sort_val = float(ds.InstanceNumber)
-                except Exception:
-                    pass
-            elif hasattr(ds, "ImagePositionPatient"):
-                try:
-                    sort_val = float(ds.ImagePositionPatient[2])
-                except Exception:
-                    pass
+            sort_val = self._dicom_slice_sort_key(ds)
             groups.setdefault(key, []).append((sort_val, f))
 
         grouped_files: Dict[str, List[str]] = {}
@@ -737,6 +726,37 @@ class ImageReader:
     # -------------------------
     # pydicom fallback helpers (kept)
     # -------------------------
+    @staticmethod
+    def _dicom_slice_position(ds: pydicom.Dataset) -> Optional[float]:
+        try:
+            ipp = np.array(ds.ImagePositionPatient, dtype=np.float64)
+        except Exception:
+            return None
+
+        try:
+            iop = np.array(ds.ImageOrientationPatient, dtype=np.float64)
+            row = iop[:3]
+            col = iop[3:]
+            normal = np.cross(row, col)
+            norm = np.linalg.norm(normal)
+            if norm > 0:
+                return float(np.dot(ipp, normal / norm))
+        except Exception:
+            pass
+
+        return float(ipp[2])
+
+    @classmethod
+    def _dicom_slice_sort_key(cls, ds: pydicom.Dataset) -> Tuple[int, float]:
+        slice_pos = cls._dicom_slice_position(ds)
+        if slice_pos is not None:
+            return (0, slice_pos)
+
+        try:
+            return (1, float(ds.InstanceNumber))
+        except Exception:
+            return (2, 0.0)
+
     def dcmread_series(self, folder_path: str) -> Tuple[np.ndarray, pydicom.Dataset]:
         files = [os.path.join(folder_path, f) for f in os.listdir(folder_path)]
         dicoms = []
@@ -768,21 +788,7 @@ class ImageReader:
                     ds for ds in dicoms if getattr(ds, "filename", None) in set(filtered_files)
                 ]
 
-        # Sort: InstanceNumber -> ImagePositionPatient[2]
-        def sort_key(ds: pydicom.Dataset) -> float:
-            if hasattr(ds, "InstanceNumber"):
-                try:
-                    return float(ds.InstanceNumber)
-                except Exception:
-                    pass
-            if hasattr(ds, "ImagePositionPatient"):
-                try:
-                    return float(ds.ImagePositionPatient[2])
-                except Exception:
-                    pass
-            return 0.0
-
-        dicoms.sort(key=sort_key)
+        dicoms.sort(key=self._dicom_slice_sort_key)
 
         slices = [d.pixel_array for d in dicoms]
         volume = np.stack(slices, axis=-1).astype(np.float32)  # (H, W, D)
@@ -817,19 +823,6 @@ class ImageReader:
         most_common_uid, _ = Counter(series_uids).most_common(1)[0]
         dicoms = [ds for ds in dicoms if getattr(ds, "SeriesInstanceUID", None) == most_common_uid]
 
-        def sort_key(ds: pydicom.Dataset) -> float:
-            if hasattr(ds, "InstanceNumber"):
-                try:
-                    return float(ds.InstanceNumber)
-                except Exception:
-                    pass
-            if hasattr(ds, "ImagePositionPatient"):
-                try:
-                    return float(ds.ImagePositionPatient[2])
-                except Exception:
-                    pass
-            return 0.0
-
         groups: Dict[str, List[pydicom.Dataset]] = {}
         for ds in dicoms:
             acq = getattr(ds, "AcquisitionNumber", None)
@@ -838,7 +831,7 @@ class ImageReader:
 
         out: Dict[str, Tuple[np.ndarray, pydicom.Dataset]] = {}
         for k, lst in groups.items():
-            lst.sort(key=sort_key)
+            lst.sort(key=self._dicom_slice_sort_key)
             slices = [d.pixel_array for d in lst]
             volume = np.stack(slices, axis=-1).astype(np.float32)
 
@@ -874,19 +867,6 @@ class ImageReader:
                 continue
             groups_by_series.setdefault(str(sid), []).append(ds)
 
-        def sort_key(ds: pydicom.Dataset) -> float:
-            if hasattr(ds, "InstanceNumber"):
-                try:
-                    return float(ds.InstanceNumber)
-                except Exception:
-                    pass
-            if hasattr(ds, "ImagePositionPatient"):
-                try:
-                    return float(ds.ImagePositionPatient[2])
-                except Exception:
-                    pass
-            return 0.0
-
         out: Dict[str, Dict[str, Tuple[np.ndarray, pydicom.Dataset]]] = {}
         for sid, lst in groups_by_series.items():
             acq_groups: Dict[str, List[pydicom.Dataset]] = {}
@@ -907,7 +887,7 @@ class ImageReader:
                             for ds in alist
                             if getattr(ds, "filename", None) in set(filtered_files)
                         ]
-                alist.sort(key=sort_key)
+                alist.sort(key=self._dicom_slice_sort_key)
                 # group by pixel array shape to avoid stacking mismatch
                 shape_groups = {}
                 for d in alist:
@@ -920,7 +900,7 @@ class ImageReader:
                     continue
                 # pick the largest shape group
                 shape, alist2 = max(shape_groups.items(), key=lambda kv: len(kv[1]))
-                alist2.sort(key=sort_key)
+                alist2.sort(key=self._dicom_slice_sort_key)
                 slices = [d.pixel_array for d in alist2]
                 volume = np.stack(slices, axis=-1).astype(np.float32)
                 intercept = float(alist2[0].get("RescaleIntercept", 0.0))
