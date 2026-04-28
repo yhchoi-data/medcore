@@ -356,7 +356,7 @@ class AbdomenSegmenter:
         return abdominal_region
 
     def _search_height_range(self, image_mip: np.ndarray, margin: int) -> List[int]:
-        image_mip = binary_fill_holes(image_mip).astype(int)
+        # image_mip = binary_fill_holes(image_mip).astype(int)
         width = image_mip.sum(1)
         if width.size == 0:
             return [0, 0]
