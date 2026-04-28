@@ -242,12 +242,14 @@ def sitk_resampler(
 
 
 def sitk_resample_point_between_volumes(
-    point_zyx: Sequence[int],
+    point_zyx: Sequence[float],
     source_volume: sitk.Image,
     target_volume: sitk.Image,
     transform: sitk.Transform,
     *,
     neighborhood_radius: int = 1,  # 1 -> 3x3x3
+    allow_outside: bool = True,
+    clip_output: bool = False,
 ) -> List[int]:
     """
     Map a voxel point from source_volume to target_volume by embedding it as a small
@@ -261,7 +263,7 @@ def sitk_resample_point_between_volumes(
 
     Parameters
     ----------
-    point_zyx : (z, y, x) int sequence
+    point_zyx : (z, y, x) sequence
         Voxel index in source_volume array coordinate (same convention as sitk.GetArrayFromImage).
     source_volume : sitk.Image
         Reference image for the input point.
@@ -273,6 +275,12 @@ def sitk_resample_point_between_volumes(
     neighborhood_radius : int, default=1
         Radius around the point to mark as 1 in the temporary mask.
         radius=1 => 3x3x3, radius=0 => single voxel.
+    allow_outside : bool, default=True
+        If True, points outside source/target grid are mapped by physical-space geometry
+        instead of raising. The returned point may still be outside target_volume.
+    clip_output : bool, default=False
+        If True, clip the returned target index to the target_volume grid.
+        Use this only when downstream code needs a valid array index.
 
     Returns
     -------
@@ -282,14 +290,48 @@ def sitk_resample_point_between_volumes(
     Raises
     ------
     ValueError
-        If mapped mask is empty (assumes point went out-of-FOV or transform mismatch).
+        If mapped mask is empty and allow_outside=False.
     """
+    point_arr_zyx = np.asarray(point_zyx, dtype=np.float64)
+    if point_arr_zyx.shape != (3,):
+        raise ValueError("`point_zyx` must be a 3-element (z, y, x) sequence.")
+    if not np.all(np.isfinite(point_arr_zyx)):
+        raise ValueError("`point_zyx` must contain finite values.")
+
+    def _map_by_physical_geometry() -> List[int]:
+        point_xyz = tuple(float(v) for v in point_arr_zyx[::-1])
+        source_physical = source_volume.TransformContinuousIndexToPhysicalPoint(point_xyz)
+        target_physical = transform.TransformPoint(source_physical)
+        target_xyz = target_volume.TransformPhysicalPointToIndex(target_physical)
+        mapped_zyx = np.array(
+            [target_xyz[2], target_xyz[1], target_xyz[0]],
+            dtype=np.int64,
+        )
+
+        if clip_output:
+            max_zyx = np.array(target_volume.GetSize()[::-1], dtype=np.int64) - 1
+            mapped_zyx = np.clip(mapped_zyx, 0, max_zyx)
+
+        return mapped_zyx.astype(int).tolist()
+
     # 1) Build small binary mask in numpy (Z,Y,X)
     src_arr = sitk.GetArrayViewFromImage(source_volume)
     mask = np.zeros(src_arr.shape, dtype=np.uint8)
 
-    z, y, x = map(int, point_zyx)
+    z, y, x = (int(v) for v in point_arr_zyx)
     r = int(neighborhood_radius)
+    if r < 0:
+        raise ValueError("`neighborhood_radius` must be >= 0.")
+
+    source_shape = np.array(mask.shape, dtype=np.float64)
+    point_inside_source = bool(np.all((0.0 <= point_arr_zyx) & (point_arr_zyx < source_shape)))
+    if not point_inside_source:
+        if allow_outside:
+            return _map_by_physical_geometry()
+        raise ValueError(
+            "Input point is outside source_volume grid. "
+            "Set allow_outside=True to map it by physical-space geometry."
+        )
 
     z0, z1 = max(0, z - r), min(mask.shape[0], z + r + 1)
     y0, y1 = max(0, y - r), min(mask.shape[1], y + r + 1)
@@ -321,11 +363,17 @@ def sitk_resample_point_between_volumes(
     # 4) Recover mapped point as robust center (median of indices where mask==1)
     idx = np.where(out_mask == 1)
     if idx[0].size == 0:
+        if allow_outside:
+            return _map_by_physical_geometry()
         raise ValueError(
             "Mapped mask is empty. The point may be outside target FOV or transform/grid mismatch."
         )
 
     mapped_zyx = np.median(np.vstack(idx), axis=1).astype(int).tolist()
+    if clip_output:
+        max_zyx = np.array(target_volume.GetSize()[::-1], dtype=np.int64) - 1
+        mapped_zyx = np.clip(np.array(mapped_zyx, dtype=np.int64), 0, max_zyx).tolist()
+
     return mapped_zyx
 
 
