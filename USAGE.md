@@ -24,7 +24,7 @@ from medcore.feature import (
 )
 ```
 
-## 2. Load image (DICOM / NIfTI)
+## 2. Load image (DICOM Series / NIfTI)
 
 ```python
 from medcore.io import ImageReader
@@ -34,7 +34,12 @@ print(vol.GetSize(), vol.GetSpacing())
 ```
 
 ```python
-vol = ImageReader("/path/to/dicom_dir").read()
+# To set the orientation, use check_coord_flag
+vol = ImageReader(
+	"/path/to/dicom_dir",
+	check_coord_flag=True,
+	target_orientation='LPS'
+).read()
 ```
 
 ## 3. Convert to NumPy and normalize
@@ -51,8 +56,10 @@ arr_norm = sitk_get_array(vol, normalize=True, norm_min=-500, norm_max=2000)
 ```python
 from medcore.utils import sitk_make_euler3dtransform, sitk_resampler
 
+# apply to transform matrix
 tfm = sitk_make_euler3dtransform(vol, rotation_deg=15, axis="x")
 vol_rot = sitk_resampler(vol, transform=tfm, interpolation="linear")
+# resample iso-voxel space
 vol_iso = sitk_resampler(vol, new_spacing=(1.0, 1.0, 1.0))
 ```
 
@@ -72,11 +79,13 @@ sitk_write_nii(img, "/path/to/out_array.nii.gz", reference=vol)
 ```python
 from medcore.segment import TorsoSegmenter, AbdomenSegmenter
 
+# Torso (Skin) Segmentation
 torso_seg = TorsoSegmenter()
-torso_mask, torso_contour, torso_smooth = torso_seg.segment(arr_norm)
+torso_vol =torso_seg.segment(vol)
 
+# Abdominal region Segmentation
 abd_seg = AbdomenSegmenter()
-abdominal_image, abdomen_mask, abdomen_contour = abd_seg.segment(arr_norm)
+abdomen_image, abdomen_mask, abdomen_region, contour_list = abd_seg.segment(vol)
 ```
 
 ## 7. Detection
@@ -85,7 +94,7 @@ abdominal_image, abdomen_mask, abdomen_contour = abd_seg.segment(arr_norm)
 from medcore.detect import UmbilicusPredictor
 
 predictor = UmbilicusPredictor()
-point_xyz = predictor.predict(arr, spacing=vol.GetSpacing())
+point_xyz = predictor.predict(vol)
 print(point_xyz)
 ```
 
@@ -96,8 +105,8 @@ detector = UmbilicusDetector()
 points_df = detector.detect(
     region_image=abdominal_image,
     region_mask=abdomen_mask,
-    region_contour=abd_seg.contour_info,
-    region_info=abd_seg.abdomen_region,
+    region_contour=contour_list,
+    region_info=abdomen_region,
 )
 print(points_df.head())
 ```
@@ -134,7 +143,17 @@ from medcore.utils import sitk_read_labelfiles
 merged = sitk_read_labelfiles(labelfiles)  # labels merged into one UInt8 volume
 ```
 
-## 10. Notes
+## 10. Convert dicom to nifti
+
+```python
+from medcore.utils import sitk_read_labelfiles
+
+dcm_dir = "/path/to/dicom_dir"
+out_dir = "/path/to/out_dir"
+convert_dicom_to_nifti(dcm_dir, out_dir)
+```
+
+## 11. Notes
 
 - `medcore.segment` import is supported directly:
   - `from medcore.segment import TorsoSegmenter`
