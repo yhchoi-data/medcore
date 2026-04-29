@@ -16,7 +16,7 @@ from .feature import (
     extract_abdominal_body_composition_metrics,
     extract_patches_from_image,
 )
-from .io.reader import ImageReader
+from .io import ImageReader, convert_dicom_to_nifti
 from .segment import (
     AbdomenSegmenter,
     TorsoSegmenter,
@@ -42,6 +42,7 @@ pd.set_option("display.float_format", "{:.4f}".format)
 __all__ = [
     "__version__",
     "ImageReader",
+    "convert_dicom_to_nifti",
     "sitk_write_nii",
     "sitk_get_array",
     "sitk_make_euler3dtransform",

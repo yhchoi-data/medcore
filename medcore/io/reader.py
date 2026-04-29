@@ -27,9 +27,9 @@ class ImageReader:
     def __init__(
         self,
         input_path: Union[str, Path],
-        check_coord_flag: bool = True,
-        verbose: bool = False,
+        check_coord_flag: bool = False,
         target_orientation: str = "LPS",  # "LPS" or "RAS"
+        verbose: bool = False,
         # --- DICOM series selection options ---
         prefer_modality: Optional[str] = None,  # e.g. "CT", "MR"
         include_series_description: Optional[

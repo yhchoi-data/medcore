@@ -38,10 +38,25 @@ pip install -e ".[dev]"
 pip install medcore
 ```
 
+### Optional: DICOM to NIfTI conversion with dcm2niix
+`medcore.io.convert_dicom_to_nifti` uses the external `dcm2niix` executable.
+Install it separately when you need dcm2niix-based DICOM to NIfTI conversion:
+
+```bash
+conda install -c conda-forge dcm2niix
+```
+
+After installation, make sure the executable is available in your shell or
+notebook kernel:
+
+```bash
+dcm2niix -h
+```
+
 ## Quick start
 
 ```python
-from medcore.io import ImageReader
+from medcore.io import ImageReader, convert_dicom_to_nifti
 from medcore.utils import (
     sitk_get_array,
     sitk_write_nii,
