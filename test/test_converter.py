@@ -1,5 +1,5 @@
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pydicom
 import pytest
@@ -7,8 +7,7 @@ from pydicom.dataset import Dataset, FileMetaDataset
 from pydicom.filewriter import dcmwrite
 from pydicom.uid import CTImageStorage, ImplicitVRLittleEndian, generate_uid
 
-from medcore.io import convert_dicom_to_nifti
-from medcore.io import converter
+from medcore.io import convert_dicom_to_nifti, converter
 
 
 def test_convert_dicom_to_nifti_raises_when_dcm2niix_missing(tmp_path, monkeypatch) -> None:

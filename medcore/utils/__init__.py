@@ -1,5 +1,6 @@
 from .sitk_utils import (
     sitk_copy_metainfo,
+    sitk_create_shell_mask,
     sitk_get_array,
     sitk_make_euler3dtransform,
     sitk_read_labelfiles,
@@ -7,9 +8,13 @@ from .sitk_utils import (
     sitk_resampler,
     sitk_write_nii,
 )
-from .utils import (
+from .vis import (
+    figure_3d_region_with_centerline,
+    figure_overlay_abdominal_distance_metrics,
     figure_overlay_label_on_slices,
     figure_overlay_label_reference_slice,
+    figure_overlay_pancreatic_craniocaudal_slices,
+    figure_overlay_pancreatic_distance_metrics,
     figure_overlay_tissue_on_slices,
     figure_patch_from_image,
     figure_slices_with_landmarks,
@@ -25,6 +30,7 @@ __all__ = [
     "sitk_resample_point_between_volumes",
     "sitk_read_labelfiles",
     "sitk_copy_metainfo",
+    "sitk_create_shell_mask",
     "make_cmap_from_base",
     "figure_overlay_tissue_on_slices",
     "figure_overlay_label_on_slices",
@@ -32,4 +38,6 @@ __all__ = [
     "figure_patch_from_image",
     "figure_slices_with_umbilicus",
     "figure_slices_with_landmarks",
+    "figure_3d_region_with_centerline",
+    "figure_overlay_pancreatic_craniocaudal_slices",
 ]
