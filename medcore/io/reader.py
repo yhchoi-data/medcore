@@ -10,14 +10,16 @@ import pandas as pd
 import pydicom
 import SimpleITK as sitk
 
+SUPPORTED_IMAGE_SUFFIXES = (".nii", ".nii.gz", ".nrrd")
+
 
 class ImageReader:
     """
-    Medical image reader for NIfTI (.nii/.nii.gz) and DICOM folders.
+    Medical image reader for NIfTI (.nii/.nii.gz), NRRD (.nrrd), and DICOM folders.
 
     Features
     --------
-    - NIfTI: read via SimpleITK
+    - NIfTI/NRRD: read via SimpleITK
     - DICOM: prefer SimpleITK ImageSeriesReader (robust), fallback to pydicom stacking
     - Multi-series selection: filter + scoring by Modality / SeriesDescription / BodyPartExamined / SliceThickness
     - Orientation standardization: SimpleITK DICOMOrientImageFilter (default LPS)
@@ -28,7 +30,7 @@ class ImageReader:
         self,
         input_path: Union[str, Path],
         check_coord_flag: bool = False,
-        target_orientation: str = "LPS",  # "LPS" or "RAS"
+        target_orientation: str = "RAS",  # "LPS" or "RAS"
         verbose: bool = False,
         # --- DICOM series selection options ---
         prefer_modality: Optional[str] = None,  # e.g. "CT", "MR"
@@ -217,65 +219,68 @@ class ImageReader:
     # -------------------------
     def load_medical_image(self, input_path: Path) -> sitk.Image:
         if input_path.is_file():
-            has_nifti = self._is_nifti_file(input_path)
-            if has_nifti:
-                return self._load_nifti(input_path)
+            has_image = self._is_supported_image_file(input_path)
+            if has_image:
+                return self._load_supported_image(input_path)
             else:
                 raise ValueError(f"Check File: {input_path}")
 
         if input_path.is_dir():
             files = [p for p in input_path.iterdir() if p.is_file()]
-            nifti_files = [p for p in files if self._is_nifti_file(p)]
-            has_nifti = len(nifti_files) > 0
+            image_files = [p for p in files if self._is_supported_image_file(p)]
+            has_image = len(image_files) > 0
             # DICOM은 몇 개만 probe
             has_dicom = False
             for p in files[: min(10, len(files))]:
-                if self._is_nifti_file(p):
+                if self._is_supported_image_file(p):
                     continue
                 if self._probe_is_dicom(p):
                     has_dicom = True
                     break
 
             # 1) 파일 없음
-            if (not has_nifti) and (not has_dicom):
-                # 실제론 "파일은 있는데 DICOM도 NIfTI도 아닌" 케이스일 수도 있으니 메시지 분리 가능
+            if (not has_image) and (not has_dicom):
+                # 실제론 "파일은 있는데 DICOM도 지원 이미지도 아닌" 케이스일 수도 있으니 메시지 분리 가능
                 files = [p for p in input_path.iterdir() if p.is_file()]
                 if not files:
                     raise ValueError(f"Empty directory: {input_path}")
-                raise ValueError(f"Directory has files but no NIfTI/DICOM detected: {input_path}")
-
-            # 2) NIfTI만 있음
-            if has_nifti and (not has_dicom):
-                # 보통 nii/nii.gz가 1개일 때 기대하지만, 여러 개면 정책 필요
-                if len(nifti_files) == 1:
-                    if self.verbose:
-                        print(f"Detected NIfTI in directory: {nifti_files[0].name}")
-                    return self._load_nifti(nifti_files[0])
-
-                # 여러 NIfTI 파일이면: 에러 or 첫 번째 선택 (여기서는 에러 권장)
                 raise ValueError(
-                    f"Multiple NIfTI files found in directory; please pass a file path.\n"
-                    f"Found: {[p.name for p in nifti_files]}"
+                    f"Directory has files but no NIfTI/NRRD/DICOM detected: {input_path}"
+                )
+
+            # 2) SimpleITK 이미지 파일만 있음
+            if has_image and (not has_dicom):
+                # 보통 단일 볼륨 파일이 1개일 때 기대하지만, 여러 개면 정책 필요
+                if len(image_files) == 1:
+                    if self.verbose:
+                        print(f"Detected image file in directory: {image_files[0].name}")
+                    return self._load_supported_image(image_files[0])
+
+                # 여러 이미지 파일이면: 에러 or 첫 번째 선택 (여기서는 에러 권장)
+                raise ValueError(
+                    f"Multiple image files found in directory; please pass a file path.\n"
+                    f"Found: {[p.name for p in image_files]}"
                 )
 
             # 3) DICOM만 있음
-            if has_dicom and (not has_nifti):
+            if has_dicom and (not has_image):
                 if self.verbose:
                     print("Detected DICOM-only directory.")
                 return self._load_dicom_folder(input_path)
 
-            # 4) 섞여 있음 (NIfTI + DICOM) 기본은 error 권장. 필요시 정책으로 선택
-            if has_dicom and has_nifti:
+            # 4) 섞여 있음 (이미지 파일 + DICOM) 기본은 error 권장. 필요시 정책으로 선택
+            if has_dicom and has_image:
                 raise ValueError(
-                    f"Mixed directory (NIfTI + DICOM) is not allowed: {input_path}\n"
-                    f"NIfTI: {[p.name for p in nifti_files[:5]]}{'...' if len(nifti_files) > 5 else ''}"
+                    f"Mixed directory (NIfTI/NRRD + DICOM) is not allowed: {input_path}\n"
+                    f"Image files: {[p.name for p in image_files[:5]]}"
+                    f"{'...' if len(image_files) > 5 else ''}"
                 )
 
         raise ValueError(f"Unsupported input: {input_path}")
 
-    def _is_nifti_file(self, folder: Path) -> bool:
+    def _is_supported_image_file(self, folder: Path) -> bool:
         name = folder.name.lower()
-        return name.endswith(".nii") or name.endswith(".nii.gz")
+        return name.endswith(SUPPORTED_IMAGE_SUFFIXES)
 
     def _probe_is_dicom(self, folder: Path) -> bool:
         # 확장자 없는 dicom이 많아서 header sniffing
@@ -286,13 +291,13 @@ class ImageReader:
         except Exception:
             return False
 
-    def _load_nifti(self, folder: Path) -> sitk.Image:
+    def _load_supported_image(self, folder: Path) -> sitk.Image:
         name = folder.name.lower()
-        if not (name.endswith(".nii") or name.endswith(".nii.gz")):
-            raise ValueError(f"Unsupported file format (expect .nii/.nii.gz): {folder}")
+        if not name.endswith(SUPPORTED_IMAGE_SUFFIXES):
+            raise ValueError(f"Unsupported file format (expect .nii/.nii.gz/.nrrd): {folder}")
 
         if self.verbose:
-            print("Detected NIfTI format.")
+            print("Detected SimpleITK-readable image format.")
         return sitk.ReadImage(str(folder))
 
     def _load_dicom_folder(self, folder: Path) -> sitk.Image:

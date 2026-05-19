@@ -409,6 +409,54 @@ def sitk_read_labelfiles(labelfiles: Mapping[int, Union[str, Path]]) -> sitk.Ima
     return combined
 
 
+def sitk_create_shell_mask(
+    mask: sitk.Image,
+    inner_mm: float = 5.0,
+    outer_mm: float = 10.0,
+) -> sitk.Image:
+    """
+    Create an external shell mask around a binary mask.
+
+    Parameters
+    ----------
+    mask : sitk.Image
+        Input binary mask. Non-zero voxels are treated as foreground.
+    inner_mm : float, default=5.0
+        Inner shell distance from the foreground boundary in millimeters.
+    outer_mm : float, default=10.0
+        Outer shell distance from the foreground boundary in millimeters.
+
+    Returns
+    -------
+    sitk.Image
+        UInt8 shell mask with the same geometry as ``mask``.
+    """
+    inner_mm = float(inner_mm)
+    outer_mm = float(outer_mm)
+    if inner_mm < 0:
+        raise ValueError("`inner_mm` must be >= 0.")
+    if outer_mm <= inner_mm:
+        raise ValueError("`outer_mm` must be greater than `inner_mm`.")
+
+    binary_mask = sitk.Cast(mask > 0, sitk.sitkUInt8)
+    mask_arr = sitk.GetArrayFromImage(binary_mask) > 0
+    if not np.any(mask_arr):
+        raise ValueError("`mask` must contain at least one foreground voxel.")
+
+    dist_map = sitk.SignedMaurerDistanceMap(
+        binary_mask,
+        squaredDistance=False,
+        useImageSpacing=True,
+        insideIsPositive=False,
+    )
+    dist_arr = sitk.GetArrayFromImage(dist_map)
+    shell = (~mask_arr) & (dist_arr >= inner_mm) & (dist_arr < outer_mm)
+
+    shell_mask = sitk.GetImageFromArray(shell.astype(np.uint8))
+    shell_mask.CopyInformation(mask)
+    return shell_mask
+
+
 def sitk_copy_metainfo(volume: sitk.Image, image: np.ndarray) -> sitk.Image:
     """
     sitk 이미지 → numpy 처리 → sitk 복원

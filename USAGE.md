@@ -153,7 +153,57 @@ out_dir = "/path/to/out_dir"
 convert_dicom_to_nifti(dcm_dir, out_dir)
 ```
 
-## 11. Notes
+## 11. Pipeline: CT Feature Extractor
+
+```python
+from medcore.pipeline import CTFeatureExtractor
+
+save_dir = '/path/to/save_dir_figure'
+fpath = '/path/to/ct.nii.gz'
+mpath = '/path/to/mask_folder/'
+hutom_id = 'HUTOM0000'
+study_uid = None
+series_uid = None
+```
+
+`mpath` must contain mask files with the exact filenames below:
+
+```text
+vertebrae_L3.nii.gz
+visceral_fat.nii.gz
+subcutaneous_fat.nii.gz
+muscle.nii.gz
+iliopsoas_right.nii.gz
+iliopsoas_left.nii.gz
+pancreas.nii.gz
+gallbladder.nii.gz
+liver.nii.gz
+spleen.nii.gz
+stomach.nii.gz
+```
+
+`pancreas.nii.gz` is used for both pancreas-specific metrics and organ volume metrics.
+
+```python
+extractor = CTFeatureExtractor(
+    save_dir=save_dir,
+)
+
+metric = extractor.run(
+    fpath,
+    mpath,
+    metadata={
+        "hutom_id": hutom_id,
+        "study_uid": study_uid,
+        "series_uid": series_uid,
+        "fpath": fpath,
+    },
+)
+
+print(metric)
+```
+
+## 12. Notes
 
 - `medcore.segment` import is supported directly:
   - `from medcore.segment import TorsoSegmenter`
