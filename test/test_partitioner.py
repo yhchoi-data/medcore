@@ -37,6 +37,14 @@ def test_region_centerline_partitioner_labels_straight_region() -> None:
 
     np.testing.assert_array_equal(region_arr, np.array([1, 1, 2, 2, 2, 3, 3]))
     assert partitioner.centerline_length == 6.0
+    np.testing.assert_allclose(
+        partitioner.cutoff_points_zyx,
+        np.array([[1.8, 0.0, 0.0], [4.2, 0.0, 0.0]]),
+    )
+    np.testing.assert_array_equal(
+        partitioner.cutoff_voxels_zyx,
+        np.array([[2, 0, 0], [4, 0, 0]]),
+    )
     assert region.GetSpacing() == image.GetSpacing()
     assert partitioner.shell_volume is None
 
@@ -61,6 +69,8 @@ def test_region_centerline_partitioner_maps_iso_skeleton_to_anisotropic_original
     assert partitioner.centerline_length == pytest.approx(6.0)
     assert partitioner.raw_centerline[:, 0].min() == pytest.approx(0.0)
     assert partitioner.raw_centerline[:, 0].max() == pytest.approx(3.0)
+    np.testing.assert_allclose(partitioner.cutoff_points_zyx, np.array([[1.5, 0.0, 0.0]]))
+    np.testing.assert_array_equal(partitioner.cutoff_voxels_zyx, np.array([[2, 0, 0]]))
     assert sitk.GetArrayFromImage(region).shape == mask.shape
 
 
@@ -77,9 +87,7 @@ def test_region_centerline_partitioner_creates_shell_masks_explicitly() -> None:
     )
 
     default_shell = sitk.GetArrayFromImage(partitioner.create_shell_mask())
-    wider_shell = sitk.GetArrayFromImage(
-        partitioner.create_shell_mask(inner_mm=1.5, outer_mm=2.5)
-    )
+    wider_shell = sitk.GetArrayFromImage(partitioner.create_shell_mask(inner_mm=1.5, outer_mm=2.5))
 
     assert default_shell.sum() == 18
     assert wider_shell.sum() == 62

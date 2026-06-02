@@ -59,6 +59,8 @@ class RegionCenterlinePartitioner:
         self.region_label: np.ndarray | None = None
         self.cumulative_length: np.ndarray | None = None
         self.centerline_length: float | None = None
+        self.cutoff_points_zyx: np.ndarray | None = None
+        self.cutoff_voxels_zyx: np.ndarray | None = None
         self.shell_volume: sitk.Image | None = None
         self.shell_region_volume: sitk.Image | None = None
 
@@ -157,9 +159,7 @@ class RegionCenterlinePartitioner:
             raise ValueError("No connected endpoint path was found in the skeleton.")
 
         self.raw_centerline_skeleton = np.asarray(best_path, dtype=np.float64)
-        self.raw_centerline = self._map_centerline_to_original_indices(
-            self.raw_centerline_skeleton
-        )
+        self.raw_centerline = self._map_centerline_to_original_indices(self.raw_centerline_skeleton)
         return self.raw_centerline
 
     def compute_length(self, centerline_zyx: np.ndarray) -> float:
@@ -235,10 +235,6 @@ class RegionCenterlinePartitioner:
         label_dtype = np.uint16 if len(self.cutoffs) + 1 > np.iinfo(np.uint8).max else np.uint8
         region_label = np.zeros(mask.shape, dtype=label_dtype)
         voxels_zyx = np.argwhere(mask)
-        if voxels_zyx.size == 0:
-            return self._array_to_label_image(region_label, volume)
-
-        voxels_mm = voxels_zyx * self.spacing_zyx
         centerline_mm = centerline * self.spacing_zyx
         diffs = np.diff(centerline_mm, axis=0)
         seg_len = np.linalg.norm(diffs, axis=1)
@@ -248,7 +244,12 @@ class RegionCenterlinePartitioner:
 
         s = cum_len / cum_len[-1]
         self.cumulative_length = s
+        self._set_cutoff_locations(centerline, cum_len, mask.shape)
 
+        if voxels_zyx.size == 0:
+            return self._array_to_label_image(region_label, volume)
+
+        voxels_mm = voxels_zyx * self.spacing_zyx
         tree = cKDTree(centerline_mm)
         _, nearest_idx = tree.query(voxels_mm, k=1)
         voxel_s = s[nearest_idx]
@@ -302,13 +303,48 @@ class RegionCenterlinePartitioner:
         mapped = np.zeros_like(points, dtype=np.float64)
         for idx, point_zyx in enumerate(points):
             skeleton_xyz = tuple(float(v) for v in point_zyx[::-1])
-            physical = self.skeleton_volume.TransformContinuousIndexToPhysicalPoint(
-                skeleton_xyz
-            )
+            physical = self.skeleton_volume.TransformContinuousIndexToPhysicalPoint(skeleton_xyz)
             original_xyz = self.mask_volume.TransformPhysicalPointToContinuousIndex(physical)
             mapped[idx] = np.asarray(original_xyz[::-1], dtype=np.float64)
 
         return mapped
+
+    def _set_cutoff_locations(
+        self,
+        centerline_zyx: np.ndarray,
+        cumulative_length: np.ndarray,
+        volume_shape: tuple[int, ...],
+    ) -> None:
+        if not self.cutoffs:
+            self.cutoff_points_zyx = np.empty((0, 3), dtype=np.float64)
+            self.cutoff_voxels_zyx = np.empty((0, 3), dtype=np.int64)
+            return
+
+        total_length = float(cumulative_length[-1])
+        cutoff_points = []
+        for cutoff in self.cutoffs:
+            target_length = float(cutoff) * total_length
+            right_idx = int(np.searchsorted(cumulative_length, target_length, side="left"))
+            if right_idx <= 0:
+                point = centerline_zyx[0]
+            elif right_idx >= len(cumulative_length):
+                point = centerline_zyx[-1]
+            else:
+                left_idx = right_idx - 1
+                segment_length = cumulative_length[right_idx] - cumulative_length[left_idx]
+                if segment_length <= 0:
+                    weight = 0.0
+                else:
+                    weight = (target_length - cumulative_length[left_idx]) / segment_length
+                point = centerline_zyx[left_idx] + weight * (
+                    centerline_zyx[right_idx] - centerline_zyx[left_idx]
+                )
+            cutoff_points.append(point)
+
+        self.cutoff_points_zyx = np.asarray(cutoff_points, dtype=np.float64)
+        max_zyx = np.asarray(volume_shape, dtype=np.int64) - 1
+        cutoff_voxels = np.rint(self.cutoff_points_zyx).astype(np.int64)
+        self.cutoff_voxels_zyx = np.clip(cutoff_voxels, 0, max_zyx)
 
     @staticmethod
     def _array_to_label_image(label: np.ndarray, reference: sitk.Image) -> sitk.Image:
