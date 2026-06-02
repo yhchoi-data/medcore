@@ -6,7 +6,7 @@ from medcore.feature import (
     extract_peripancreatic_fat_volume,
 )
 from medcore.io import ImageReader, convert_dicom_to_nifti
-from medcore.pipeline import CTFeatureExtractor
+from medcore.pipeline import CTFeatureExtractor, UmbilicusDetectionPipeline
 from medcore.segment import AbdomenSegmenter, RegionCenterlinePartitioner, TorsoSegmenter
 from medcore.utils import (
     figure_overlay_label_on_slices,
@@ -23,6 +23,7 @@ def test_public_imports_are_available() -> None:
     assert ImageReader is not None
     assert convert_dicom_to_nifti is not None
     assert CTFeatureExtractor is not None
+    assert UmbilicusDetectionPipeline is not None
     assert sitk_get_array is not None
     assert sitk_make_euler3dtransform is not None
     assert sitk_read_labelfiles is not None

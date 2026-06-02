@@ -203,7 +203,23 @@ metric = extractor.run(
 print(metric)
 ```
 
-## 12. Notes
+## 12. Pipeline: Umbilicus Detection
+
+```python
+from medcore.pipeline import UmbilicusDetectionPipeline
+
+pipeline = UmbilicusDetectionPipeline()
+result = pipeline.run("/path/to/ct.nii.gz")
+
+print(result.umbilicus_points)
+print(result.candidates)
+```
+
+`result.umbilicus_points` contains the selected point as raw image voxel coordinates
+(`RAW`), resampled supine coordinates (`ISO`), and raw image spacing (`VOX`).
+`result.candidates` keeps the filtered predictor/detector candidates with `MEAN_HU`.
+
+## 13. Notes
 
 - `medcore.segment` import is supported directly:
   - `from medcore.segment import TorsoSegmenter`

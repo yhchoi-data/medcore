@@ -32,6 +32,30 @@ from ..utils import (
 
 class CTFeatureExtractor:
     metadata_keys = ("hutom_id", "study_uid", "series_uid", "fpath")
+    peripancreatic_base_metric_keys = (
+        "total_shell_voxel_count",
+        "total_shell_volume_cm3",
+        "total_fat_voxel_count",
+        "total_fat_volume_cm3",
+        "superior_fat_voxel_count",
+        "superior_fat_volume_cm3",
+        "anterior_fat_voxel_count",
+        "anterior_fat_volume_cm3",
+    )
+    craniocaudal_base_metric_keys = (
+        "total_fat_voxel_count",
+        "total_fat_volume_cm3",
+    )
+    craniocaudal_octants = (
+        "superior_anterior_left",
+        "superior_anterior_right",
+        "superior_posterior_left",
+        "superior_posterior_right",
+        "inferior_anterior_left",
+        "inferior_anterior_right",
+        "inferior_posterior_left",
+        "inferior_posterior_right",
+    )
 
     def __init__(
         self,
@@ -66,11 +90,15 @@ class CTFeatureExtractor:
         volumes = self._load_volumes(ctx)
 
         vol_pancreas_calib, n_components = self._largest_component(volumes["vol_pancreas"])
-        pancreas_fat_metrics = self._extract_peripancreatic_metrics(
-            vol=volumes["vol"],
-            vol_pancreas=vol_pancreas_calib,
-            ctx=ctx,
-        )
+        pancreas_is_empty = n_components == 0
+        if pancreas_is_empty:
+            pancreas_fat_metrics = self._empty_peripancreatic_metrics()
+        else:
+            pancreas_fat_metrics = self._extract_peripancreatic_metrics(
+                vol=volumes["vol"],
+                vol_pancreas=vol_pancreas_calib,
+                ctx=ctx,
+            )
 
         tfm_axis, coronal_degree = self._make_supine_transform(volumes["vol"])
         sup = self._resample_to_supine(volumes, vol_pancreas_calib, tfm_axis)
@@ -85,19 +113,23 @@ class CTFeatureExtractor:
         )
         self._save_abdominal_metric_figure(ctx, sup, abdominal_distance_metrics)
 
-        pancreatic_distance_metrics = extract_pancreatic_distance_metrics(
-            volume_torso=sup["vol_torso"],
-            volume_pancreas=sup["vol_pancreas"],
-        )
-        self._save_pancreatic_distance_figure(ctx, sup, pancreatic_distance_metrics)
+        if pancreas_is_empty:
+            pancreatic_distance_metrics = self._empty_pancreatic_distance_metrics()
+            pancreas_ccfat_metrics = self._empty_craniocaudal_fat_metrics()
+        else:
+            pancreatic_distance_metrics = extract_pancreatic_distance_metrics(
+                volume_torso=sup["vol_torso"],
+                volume_pancreas=sup["vol_pancreas"],
+            )
+            self._save_pancreatic_distance_figure(ctx, sup, pancreatic_distance_metrics)
 
-        pancreas_ccfat_metrics = extract_craniocaudal_fat_volume(
-            vol=sup["vol"],
-            vol_mask=sup["vol_pancreas"],
-            vol_shell=sup["vol_vfat"],
-            hu_range=self.hu_range,
-        )
-        self._save_pancreatic_ccfat_figure(ctx, sup, pancreas_ccfat_metrics)
+            pancreas_ccfat_metrics = extract_craniocaudal_fat_volume(
+                vol=sup["vol"],
+                vol_mask=sup["vol_pancreas"],
+                vol_shell=sup["vol_vfat"],
+                hu_range=self.hu_range,
+            )
+            self._save_pancreatic_ccfat_figure(ctx, sup, pancreas_ccfat_metrics)
 
         metric_row = self._build_metric_row(
             n_components=n_components,
@@ -115,6 +147,8 @@ class CTFeatureExtractor:
             tfm_axis=tfm_axis,
             optimal_idx=optimal_idx,
         )
+        if pancreas_is_empty:
+            tissue_metrics["pancreas_volume_cm3"] = None
 
         result = {key: ctx["metadata"].get(key, "") for key in self.metadata_keys}
         result.update(metric_row)
@@ -156,8 +190,31 @@ class CTFeatureExtractor:
         cc = sitk.RelabelComponent(sitk.ConnectedComponent(vol_pancreas))
         n_components = int(sitk.GetArrayFromImage(cc).max())
         if n_components == 0:
-            raise ValueError("Pancreas mask is empty.")
+            return vol_pancreas > 0, n_components
         return cc == 1, n_components
+
+    def _empty_peripancreatic_metrics(self) -> dict[str, Any]:
+        keys = list(self.peripancreatic_base_metric_keys)
+        for label in range(1, self._n_pancreas_regions() + 1):
+            keys.append(f"region_{label}_fat_voxel_count")
+            keys.append(f"region_{label}_fat_volume_cm3")
+        return {key: None for key in keys}
+
+    def _n_pancreas_regions(self) -> int:
+        try:
+            return len(self.pancreas_cutoffs) + 1
+        except TypeError:
+            return 2
+
+    def _empty_pancreatic_distance_metrics(self) -> dict[str, Any]:
+        return {"PAAD_cm": None}
+
+    def _empty_craniocaudal_fat_metrics(self) -> dict[str, Any]:
+        keys = list(self.craniocaudal_base_metric_keys)
+        for octant in self.craniocaudal_octants:
+            keys.append(f"{octant}_fat_voxel_count")
+            keys.append(f"{octant}_fat_volume_cm3")
+        return {key: None for key in keys}
 
     def _extract_peripancreatic_metrics(
         self,
@@ -277,7 +334,7 @@ class CTFeatureExtractor:
         abdominal_distance_metrics: dict[str, Any],
     ) -> dict[str, Any]:
         return {
-            "N.Pancreas_Connected_Components": n_components,
+            "N.Pancreas_Connected_Components": n_components if n_components > 0 else None,
             "coronal_plane_degree": coronal_degree,
             **pancreas_fat_metrics,
             **pancreas_ccfat_metrics,

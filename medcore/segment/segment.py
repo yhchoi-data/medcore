@@ -128,7 +128,7 @@ class TorsoSegmenter:
             start_idx = height // 4
             end_idx = height - self.slice_margin
         else:
-            sum_threshold = np.quantile(slice_sums, 0.5)
+            sum_threshold = np.quantile(slice_sums, 0.25)
             valid_indices = np.where(slice_sums > sum_threshold)[0]
             if len(valid_indices) == 0:
                 # Another fallback

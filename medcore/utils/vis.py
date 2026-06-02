@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Mapping, Optional, Sequence, Tuple, Dict, Any
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
