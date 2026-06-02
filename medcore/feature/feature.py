@@ -448,17 +448,6 @@ def extract_abdominal_distance_metrics(
 
     torso_slice = binary_dilation(torso_arr[l3_index], structure=np.ones((3, 3), dtype=bool))
 
-    # labels = measure.label(sfat_arr[l3_index] > 0, connectivity=2)
-    # counts = np.bincount(labels.ravel())
-    # if len(counts) <= 1:
-    #     raise ValueError("No subcutaneous fat component found.")
-    # counts[0] = 0
-    # largest_label = int(counts.argmax())
-    # if largest_label == 0 or counts[largest_label] == 0:
-    #     raise ValueError("No subcutaneous fat component found.")
-
-    # sfat_slice = labels == largest_label
-
     sfat_slice = remove_small_objects(
         sfat_arr[l3_index].astype(bool),
         min_size=min_sfat_hole_size,
@@ -472,6 +461,10 @@ def extract_abdominal_distance_metrics(
     sfat_slice = cv2.morphologyEx(
         sfat_slice.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)
     ).astype(bool)
+    sfat_slice[0, :] = 0  # 위
+    sfat_slice[-1:, :] = 0  # 아래
+    sfat_slice[:, 0] = 0  # 왼쪽
+    sfat_slice[:, -1] = 0  # 오른쪽
 
     l3_rows, l3_cols = np.where(l3_slice)
     l3_ref_row = int(l3_rows.min())
@@ -491,16 +484,51 @@ def extract_abdominal_distance_metrics(
     APD_mm = float((apd_rows.max() - apd_rows.min()) * spacing_y)
     AP_mm = float((l3_ref_row - apd_rows.min()) * spacing_y)
 
+    def _zero_sft_metrics(n_anterior_contour_points: int = 0) -> dict[str, Any]:
+        return {
+            "Max_SFT_cm": 0.0,
+            "Min_SFT_cm": 0.0,
+            "Left_SFT_cm": 0.0,
+            "Right_SFT_cm": 0.0,
+            "Anterior_SFT_cm": 0.0,
+            "Mean_SFT_cm": 0.0,
+            "Median_SFT_cm": 0.0,
+            "LRD_cm": LRD_mm / 10.0,
+            "APD_cm": APD_mm / 10.0,
+            "AP_cm": AP_mm / 10.0,
+            "SFT_LR_margin": None,
+            "LRD_margin": (int(lrd_cols.min()), int(lrd_cols.max())),
+            "APD_margin": (int(apd_rows.min()), int(apd_rows.max())),
+            "l3_reference_point_zyx": l3_reference_point_zyx,
+            "max_sft_point_yx": None,
+            "left_sft_point_yx": None,
+            "right_sft_point_yx": None,
+            "anterior_sft_point_yx": None,
+            "fat_max_start_yx": None,
+            "fat_max_end_yx": None,
+            "fat_min_start_yx": None,
+            "fat_min_end_yx": None,
+            "fat_left_start_yx": None,
+            "fat_left_end_yx": None,
+            "fat_right_start_yx": None,
+            "fat_right_end_yx": None,
+            "fat_anterior_start_yx": None,
+            "fat_anterior_end_yx": None,
+            "normal_yx": None,
+            "n_anterior_contour_points": int(n_anterior_contour_points),
+            "n_positive_sft_points": 0,
+        }
+
     contours = measure.find_contours(sfat_slice.astype(float), level=0.5)
     if len(contours) == 0:
-        raise ValueError("No subcutaneous fat contour found.")
+        return _zero_sft_metrics()
 
     # contour = max(contours, key=_polygon_area_yx)
     contour = np.concatenate(contours)
     contour = np.unique(contour, axis=0)
     anterior_contour = contour[contour[:, 0] < l3_ref_row]
     if len(anterior_contour) == 0:
-        raise ValueError("No anterior subcutaneous fat contour found.")
+        return _zero_sft_metrics()
 
     contour_cols = np.round(anterior_contour[:, 1]).astype(int)
     new_contour = []
@@ -729,6 +757,7 @@ def extract_peripancreatic_fat_volume(
     vol_shell: sitk.Image,
     vol_shell_region: sitk.Image,
     hu_range: tuple[float, float] = (-190, -30),
+    center_mask: tuple[float, float, float] | np.ndarray | None = None,
 ) -> dict[str, int | float]:
     """
     Extract peripancreatic fat voxel counts and volumes from shell masks.
@@ -761,11 +790,16 @@ def extract_peripancreatic_fat_volume(
     total_count = int(np.count_nonzero(shell))
     total_fat_count = int(np.count_nonzero(total_fat_mask))
 
-    center_pancreas = center_of_mass(mask)
-    if np.any(np.isnan(center_pancreas)):
-        raise ValueError("vol_mask is empty. Cannot compute pancreas centroid.")
+    if center_mask is None:
+        center_mask = center_of_mass(mask)
+        if np.any(np.isnan(center_mask)):
+            raise ValueError("vol_mask is empty. Cannot compute pancreas centroid.")
+    else:
+        center_mask = np.asarray(center_mask, dtype=float)
+        if center_mask.shape != (3,) or not np.all(np.isfinite(center_mask)):
+            raise ValueError("`center_mask` must contain three finite values.")
 
-    zc, yc, _ = center_pancreas
+    zc, yc, _ = center_mask
     z_grid = np.arange(mask.shape[0])[:, None, None]
     y_grid = np.arange(mask.shape[1])[None, :, None]
 
@@ -807,6 +841,7 @@ def extract_craniocaudal_fat_volume(
     vol_shell: sitk.Image,
     hu_range: tuple[float, float] = (-190, -30),
     margin: int = 10,
+    center_mask: tuple[float, float, float] | np.ndarray | None = None,
 ) -> dict[str, int | float | tuple[float, float, float]]:
     """
     Extract peripancreatic fat voxel counts and volumes from a shell mask.
@@ -814,8 +849,9 @@ def extract_craniocaudal_fat_volume(
     Fat voxels are defined by ``hu_range`` inside ``vol_shell`` and are limited
     to the craniocaudal extent of ``vol_mask`` with ``margin`` slices added at
     both ends. The function returns total fat volume, anterior-superior fat
-    volume, and 8 octant-wise fat volumes split by the pancreas centroid
-    ``(zc, yc, xc)``.
+    volume, and 8 octant-wise fat volumes split by ``center_mask``. If
+    ``center_mask`` is ``None``, the split center is computed from ``vol_mask``
+    with ``center_of_mass``.
 
     ``vol`` must be oriented as either LPS or RAS. The anatomical half-spaces
     are inferred from ``vol.GetDirection()``:
@@ -840,14 +876,22 @@ def extract_craniocaudal_fat_volume(
     voxel_volume_cm3 = float(np.prod(vol.GetSpacing()) / 1000.0)
     shell_margin = (img >= hu_min) & (img <= hu_max) & shell
     z_idx = np.where(mask.max(2))[0]
+    if len(z_idx) == 0:
+        raise ValueError("vol_mask is empty. Cannot select craniocaudal extent.")
+
     shell_margin[: z_idx[0] - margin, ...] = 0
     shell_margin[z_idx[-1] + margin :, ...] = 0
 
     total_fat_count = int(np.count_nonzero(shell_margin))
 
-    center_mask = center_of_mass(mask)
-    if np.any(np.isnan(center_mask)):
-        raise ValueError("vol_mask is empty. Cannot compute pancreas centroid.")
+    if center_mask is None:
+        center_mask = center_of_mass(mask)
+        if np.any(np.isnan(center_mask)):
+            raise ValueError("vol_mask is empty. Cannot compute pancreas centroid.")
+    else:
+        center_mask = np.asarray(center_mask, dtype=float)
+        if center_mask.shape != (3,) or not np.all(np.isfinite(center_mask)):
+            raise ValueError("`center_mask` must contain three finite values.")
 
     zc, yc, xc = center_mask
     z_grid = np.arange(mask.shape[0])[:, None, None]

@@ -23,7 +23,7 @@ from .feature import (
     extract_peripancreatic_fat_volume,
 )
 from .io import ImageReader, convert_dicom_to_nifti
-from .pipeline import CTFeatureExtractor
+from .pipeline import CTFeatureExtractor, UmbilicusDetectionPipeline, UmbilicusDetectionResult
 from .segment import (
     AbdomenSegmenter,
     RegionCenterlinePartitioner,
@@ -56,6 +56,8 @@ __all__ = [
     "__version__",
     "ImageReader",
     "CTFeatureExtractor",
+    "UmbilicusDetectionPipeline",
+    "UmbilicusDetectionResult",
     "convert_dicom_to_nifti",
     "sitk_write_nii",
     "sitk_get_array",
