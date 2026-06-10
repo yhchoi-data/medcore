@@ -37,6 +37,18 @@ def test_region_centerline_partitioner_labels_straight_region() -> None:
 
     np.testing.assert_array_equal(region_arr, np.array([1, 1, 2, 2, 2, 3, 3]))
     assert partitioner.centerline_length == 6.0
+    assert partitioner.curvature_index == pytest.approx(1.0)
+    assert partitioner.region_curvature_indices == {
+        "region_1": pytest.approx(1.0),
+        "region_2": pytest.approx(1.0),
+        "region_3": pytest.approx(1.0),
+        "first": pytest.approx(1.0),
+        "last": pytest.approx(1.0),
+    }
+    assert partitioner.first_curvature_index == pytest.approx(1.0)
+    assert partitioner.last_curvature_index == pytest.approx(1.0)
+    np.testing.assert_allclose(partitioner.centerline_midpoint_zyx, np.array([3.0, 0.0, 0.0]))
+    np.testing.assert_array_equal(partitioner.centerline_midpoint_voxel_zyx, np.array([3, 0, 0]))
     np.testing.assert_allclose(
         partitioner.cutoff_points_zyx,
         np.array([[1.8, 0.0, 0.0], [4.2, 0.0, 0.0]]),
@@ -69,9 +81,53 @@ def test_region_centerline_partitioner_maps_iso_skeleton_to_anisotropic_original
     assert partitioner.centerline_length == pytest.approx(6.0)
     assert partitioner.raw_centerline[:, 0].min() == pytest.approx(0.0)
     assert partitioner.raw_centerline[:, 0].max() == pytest.approx(3.0)
+    np.testing.assert_allclose(partitioner.centerline_midpoint_zyx, np.array([1.5, 0.0, 0.0]))
+    np.testing.assert_array_equal(partitioner.centerline_midpoint_voxel_zyx, np.array([2, 0, 0]))
     np.testing.assert_allclose(partitioner.cutoff_points_zyx, np.array([[1.5, 0.0, 0.0]]))
     np.testing.assert_array_equal(partitioner.cutoff_voxels_zyx, np.array([[2, 0, 0]]))
     assert sitk.GetArrayFromImage(region).shape == mask.shape
+
+
+def test_region_centerline_partitioner_computes_curvature_indices_by_cutoff() -> None:
+    mask = np.ones((3, 3, 1), dtype=np.uint8)
+    image = sitk.GetImageFromArray(mask)
+    image.SetSpacing((1.0, 1.0, 1.0))
+
+    partitioner = RegionCenterlinePartitioner(
+        image,
+        cutoffs=(0.25, 0.75),
+    )
+    centerline = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ]
+    )
+
+    metrics = partitioner.compute_curvature_indices(
+        centerline,
+        region_names=("tail", "body", "head"),
+    )
+
+    assert metrics["curvature_index"] == pytest.approx(np.sqrt(2.0))
+    assert metrics["tail_curvature_index"] == pytest.approx(1.0)
+    assert metrics["body_curvature_index"] == pytest.approx(np.sqrt(2.0))
+    assert metrics["head_curvature_index"] == pytest.approx(1.0)
+    assert metrics["first_curvature_index"] == pytest.approx(1.0)
+    assert metrics["last_curvature_index"] == pytest.approx(1.0)
+    assert partitioner.curvature_index == pytest.approx(metrics["curvature_index"])
+    assert partitioner.first_curvature_index == pytest.approx(metrics["first_curvature_index"])
+    assert partitioner.last_curvature_index == pytest.approx(metrics["last_curvature_index"])
+    np.testing.assert_allclose(partitioner.centerline_midpoint_zyx, np.array([1.0, 0.0, 0.0]))
+    np.testing.assert_array_equal(partitioner.centerline_midpoint_voxel_zyx, np.array([1, 0, 0]))
+    assert partitioner.region_curvature_indices == {
+        "tail": pytest.approx(1.0),
+        "body": pytest.approx(np.sqrt(2.0)),
+        "head": pytest.approx(1.0),
+        "first": pytest.approx(1.0),
+        "last": pytest.approx(1.0),
+    }
 
 
 def test_region_centerline_partitioner_creates_shell_masks_explicitly() -> None:

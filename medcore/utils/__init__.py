@@ -2,6 +2,7 @@ from .sitk_utils import (
     sitk_copy_metainfo,
     sitk_create_shell_mask,
     sitk_get_array,
+    sitk_get_shape_features,
     sitk_make_euler3dtransform,
     sitk_read_labelfiles,
     sitk_resample_point_between_volumes,
@@ -25,6 +26,7 @@ from .vis import (
 __all__ = [
     "sitk_write_nii",
     "sitk_get_array",
+    "sitk_get_shape_features",
     "sitk_make_euler3dtransform",
     "sitk_resampler",
     "sitk_resample_point_between_volumes",

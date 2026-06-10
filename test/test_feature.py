@@ -34,32 +34,37 @@ def _fat_inputs(direction: tuple[float, ...] | None = None) -> tuple[sitk.Image,
     )
 
 
-def test_extract_peripancreatic_fat_volume_uses_lps_anterior_direction() -> None:
+def test_extract_peripancreatic_fat_volume_returns_total_and_region_metrics() -> None:
     result = extract_peripancreatic_fat_volume(*_fat_inputs())
 
     assert result["total_shell_voxel_count"] == 45
-    assert result["total_shell_volume_ml"] == pytest.approx(1.08)
-    assert result["total_fat_voxel_count"] == 45
-    assert result["superior_fat_voxel_count"] == 30
-    assert result["anterior_fat_voxel_count"] == 18
+    assert result["total_shell_volume_cm3"] == pytest.approx(1.08)
+    assert result["total_shell_fat_voxel_count"] == 45
+    assert result["total_shell_fat_volume_cm3"] == pytest.approx(1.08)
     assert result["region_1_fat_voxel_count"] == 9
     assert result["region_2_fat_voxel_count"] == 9
+    assert "superior_fat_voxel_count" not in result
+    assert "superior_fat_volume_cm3" not in result
+    assert "anterior_fat_voxel_count" not in result
+    assert "anterior_fat_volume_cm3" not in result
 
 
-def test_extract_peripancreatic_fat_volume_uses_ras_anterior_direction() -> None:
+def test_extract_peripancreatic_fat_volume_accepts_non_directional_metrics_for_ras() -> None:
     ras_direction = (-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0)
 
     result = extract_peripancreatic_fat_volume(*_fat_inputs(ras_direction))
 
-    assert result["superior_fat_voxel_count"] == 30
-    assert result["anterior_fat_voxel_count"] == 36
+    assert result["total_shell_voxel_count"] == 45
+    assert "superior_fat_voxel_count" not in result
+    assert "anterior_fat_voxel_count" not in result
 
 
-def test_extract_peripancreatic_fat_volume_rejects_unsupported_orientation() -> None:
+def test_extract_peripancreatic_fat_volume_accepts_unsupported_orientation() -> None:
     rip_direction = (-1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, -1.0, 0.0)
 
-    with pytest.raises(ValueError, match="orientation must be LPS or RAS"):
-        extract_peripancreatic_fat_volume(*_fat_inputs(rip_direction))
+    result = extract_peripancreatic_fat_volume(*_fat_inputs(rip_direction))
+
+    assert result["total_shell_voxel_count"] == 45
 
 
 def _abdominal_distance_inputs(sfat_slice: np.ndarray) -> tuple[sitk.Image, ...]:
