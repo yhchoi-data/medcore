@@ -23,7 +23,13 @@ from .feature import (
     extract_peripancreatic_fat_volume,
 )
 from .io import ImageReader, convert_dicom_to_nifti
-from .pipeline import CTFeatureExtractor, UmbilicusDetectionPipeline, UmbilicusDetectionResult
+from .pipeline import (
+    CTFeatureExtractor,
+    UmbilicusDetectionPipeline,
+    UmbilicusDetectionResult,
+    pancreatic_distance,
+    pancreatic_morphology,
+)
 from .segment import (
     AbdomenSegmenter,
     RegionCenterlinePartitioner,
@@ -43,6 +49,7 @@ from .utils import (
     sitk_copy_metainfo,
     sitk_create_shell_mask,
     sitk_get_array,
+    sitk_get_shape_features,
     sitk_make_euler3dtransform,
     sitk_read_labelfiles,
     sitk_resample_point_between_volumes,
@@ -56,11 +63,14 @@ __all__ = [
     "__version__",
     "ImageReader",
     "CTFeatureExtractor",
+    "pancreatic_morphology",
+    "pancreatic_distance",
     "UmbilicusDetectionPipeline",
     "UmbilicusDetectionResult",
     "convert_dicom_to_nifti",
     "sitk_write_nii",
     "sitk_get_array",
+    "sitk_get_shape_features",
     "sitk_make_euler3dtransform",
     "sitk_resampler",
     "sitk_resample_point_between_volumes",

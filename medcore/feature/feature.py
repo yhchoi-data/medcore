@@ -486,16 +486,16 @@ def extract_abdominal_distance_metrics(
 
     def _zero_sft_metrics(n_anterior_contour_points: int = 0) -> dict[str, Any]:
         return {
-            "Max_SFT_cm": 0.0,
-            "Min_SFT_cm": 0.0,
-            "Left_SFT_cm": 0.0,
-            "Right_SFT_cm": 0.0,
-            "Anterior_SFT_cm": 0.0,
-            "Mean_SFT_cm": 0.0,
-            "Median_SFT_cm": 0.0,
-            "LRD_cm": LRD_mm / 10.0,
-            "APD_cm": APD_mm / 10.0,
-            "AP_cm": AP_mm / 10.0,
+            "Max_SFT(cm)": 0.0,
+            "Min_SFT(cm)": 0.0,
+            "Left_SFT(cm)": 0.0,
+            "Right_SFT(cm)": 0.0,
+            "Anterior_SFT(cm)": 0.0,
+            "Mean_SFT(cm)": 0.0,
+            "Median_SFT(cm)": 0.0,
+            "LRD(cm)": LRD_mm / 10.0,
+            "APD(cm)": APD_mm / 10.0,
+            "AP(cm)": AP_mm / 10.0,
             "SFT_LR_margin": None,
             "LRD_margin": (int(lrd_cols.min()), int(lrd_cols.max())),
             "APD_margin": (int(apd_rows.min()), int(apd_rows.max())),
@@ -605,16 +605,16 @@ def extract_abdominal_distance_metrics(
     median_SFT_mm = float(np.median(positive_thickness)) if len(positive_thickness) > 0 else 0.0
 
     return {
-        "Max_SFT_cm": float(max_SFT_mm / 10.0),
-        "Min_SFT_cm": float(min_SFT_mm / 10.0),
-        "Left_SFT_cm": float(left_SFT_mm / 10.0),
-        "Right_SFT_cm": float(right_SFT_mm / 10.0),
-        "Anterior_SFT_cm": float(anterior_SFT_mm / 10.0),
-        "Mean_SFT_cm": mean_SFT_mm / 10.0,
-        "Median_SFT_cm": median_SFT_mm / 10.0,
-        "LRD_cm": LRD_mm / 10.0,
-        "APD_cm": APD_mm / 10.0,
-        "AP_cm": AP_mm / 10.0,
+        "Max_SFT(cm)": float(max_SFT_mm / 10.0),
+        "Min_SFT(cm)": float(min_SFT_mm / 10.0),
+        "Left_SFT(cm)": float(left_SFT_mm / 10.0),
+        "Right_SFT(cm)": float(right_SFT_mm / 10.0),
+        "Anterior_SFT(cm)": float(anterior_SFT_mm / 10.0),
+        "Mean_SFT(cm)": mean_SFT_mm / 10.0,
+        "Median_SFT(cm)": median_SFT_mm / 10.0,
+        "LRD(cm)": LRD_mm / 10.0,
+        "APD(cm)": APD_mm / 10.0,
+        "AP(cm)": AP_mm / 10.0,
         "SFT_LR_margin": sft_lr_margin,
         "LRD_margin": (int(lrd_cols.min()), int(lrd_cols.max())),
         "APD_margin": (int(apd_rows.min()), int(apd_rows.max())),
@@ -685,7 +685,7 @@ def extract_pancreatic_distance_metrics(
     PAAD_mm = float((anterior_row - skin_row) * spacing_y)
 
     return {
-        "PAAD_cm": PAAD_mm / 10.0,
+        "PAAD(cm)": PAAD_mm / 10.0,
         "slice_index": slice_index,
         "pancreas_point_yx": pancreas_point_yx,
         "skin_point_yx": skin_point_yx,
@@ -742,11 +742,11 @@ def extract_abdominal_body_composition_metrics(
     fat_area_mm2 = float(np.sum(tissue_mask == 2) * pixel_area_mm2)
 
     return {
-        "MA_cm2": muscle_area_mm2 / 100.0,
-        "SFA_cm2": fat_area_mm2 / 100.0,
-        "perimeter_cm": perimeter_mm / 10.0,
-        "TAD_cm": tad_mm / 10.0,
-        "SAD_cm": sad_mm / 10.0,
+        "MA(cm2)": muscle_area_mm2 / 100.0,
+        "SFA(cm2)": fat_area_mm2 / 100.0,
+        "perimeter(cm)": perimeter_mm / 10.0,
+        "TAD(cm)": tad_mm / 10.0,
+        "SAD(cm)": sad_mm / 10.0,
         "Ratio": float(tad_mm / sad_mm) if sad_mm > 0 else np.nan,
     }
 
@@ -762,18 +762,11 @@ def extract_peripancreatic_fat_volume(
     """
     Extract peripancreatic fat voxel counts and volumes from shell masks.
 
-    ``vol`` must be oriented as either LPS or RAS. The anterior half-space is
-    inferred from ``vol.GetDirection()``:
-    - LPS: anterior is decreasing array-y.
-    - RAS: anterior is increasing array-y.
+    ``center_mask`` is retained for compatibility and is ignored.
     """
     hu_min, hu_max = hu_range
     if hu_min > hu_max:
         raise ValueError("`hu_range` must be ordered as (min, max).")
-
-    orientation = sitk.DICOMOrientImageFilter_GetOrientationFromDirectionCosines(vol.GetDirection())
-    if orientation not in {"LPS", "RAS"}:
-        raise ValueError(f"`vol` orientation must be LPS or RAS. Got: {orientation}")
 
     img = sitk.GetArrayFromImage(vol)
     mask = sitk.GetArrayFromImage(vol_mask) > 0
@@ -790,37 +783,11 @@ def extract_peripancreatic_fat_volume(
     total_count = int(np.count_nonzero(shell))
     total_fat_count = int(np.count_nonzero(total_fat_mask))
 
-    if center_mask is None:
-        center_mask = center_of_mass(mask)
-        if np.any(np.isnan(center_mask)):
-            raise ValueError("vol_mask is empty. Cannot compute pancreas centroid.")
-    else:
-        center_mask = np.asarray(center_mask, dtype=float)
-        if center_mask.shape != (3,) or not np.all(np.isfinite(center_mask)):
-            raise ValueError("`center_mask` must contain three finite values.")
-
-    zc, yc, _ = center_mask
-    z_grid = np.arange(mask.shape[0])[:, None, None]
-    y_grid = np.arange(mask.shape[1])[None, :, None]
-
-    superior_fat_mask = shell & (z_grid >= zc) & fat_hu_mask
-    if orientation == "LPS":
-        anterior_halfspace = y_grid <= yc
-    else:
-        anterior_halfspace = y_grid >= yc
-    anterior_fat_mask = shell & anterior_halfspace & fat_hu_mask
-
-    superior_count = int(np.count_nonzero(superior_fat_mask))
-    anterior_count = int(np.count_nonzero(anterior_fat_mask))
     result: dict[str, int | float] = {
         "total_shell_voxel_count": total_count,
-        "total_shell_volume_cm3": total_count * voxel_volume_cm3,
-        "total_fat_voxel_count": total_fat_count,
-        "total_fat_volume_cm3": total_fat_count * voxel_volume_cm3,
-        "superior_fat_voxel_count": superior_count,
-        "superior_fat_volume_cm3": superior_count * voxel_volume_cm3,
-        "anterior_fat_voxel_count": anterior_count,
-        "anterior_fat_volume_cm3": anterior_count * voxel_volume_cm3,
+        "total_shell_volume(cm3)": total_count * voxel_volume_cm3,
+        "total_shell_fat_voxel_count": total_fat_count,
+        "total_shell_fat_volume(cm3)": total_fat_count * voxel_volume_cm3,
     }
 
     region_labels = np.unique(shell_region)
@@ -830,7 +797,7 @@ def extract_peripancreatic_fat_volume(
         count = int(np.count_nonzero(region_fat_mask))
         key = f"region_{int(label)}"
         result[f"{key}_fat_voxel_count"] = count
-        result[f"{key}_fat_volume_cm3"] = count * voxel_volume_cm3
+        result[f"{key}_fat_volume(cm3)"] = count * voxel_volume_cm3
 
     return result
 
@@ -924,12 +891,12 @@ def extract_craniocaudal_fat_volume(
 
     result: dict[str, int | float | tuple[float, float, float]] = {
         "total_fat_voxel_count": total_fat_count,
-        "total_fat_volume_cm3": total_fat_count * voxel_volume_cm3,
+        "total_fat_volume(cm3)": total_fat_count * voxel_volume_cm3,
     }
 
     for key, octant_mask in octant_masks.items():
         count = int(np.count_nonzero(shell_margin & octant_mask))
         result[f"{key}_fat_voxel_count"] = count
-        result[f"{key}_fat_volume_cm3"] = count * voxel_volume_cm3
+        result[f"{key}_fat_volume(cm3)"] = count * voxel_volume_cm3
 
     return result

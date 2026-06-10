@@ -59,6 +59,12 @@ class RegionCenterlinePartitioner:
         self.region_label: np.ndarray | None = None
         self.cumulative_length: np.ndarray | None = None
         self.centerline_length: float | None = None
+        self.curvature_index: float | None = None
+        self.first_curvature_index: float | None = None
+        self.last_curvature_index: float | None = None
+        self.region_curvature_indices: dict[str, float] | None = None
+        self.centerline_midpoint_zyx: np.ndarray | None = None
+        self.centerline_midpoint_voxel_zyx: np.ndarray | None = None
         self.cutoff_points_zyx: np.ndarray | None = None
         self.cutoff_voxels_zyx: np.ndarray | None = None
         self.shell_volume: sitk.Image | None = None
@@ -199,7 +205,70 @@ class RegionCenterlinePartitioner:
         z_s, y_s, x_s = splev(np.linspace(0.0, 1.0, n_points), tck)
         smooth_mm = np.vstack([z_s, y_s, x_s]).T
         self.smooth_centerline = smooth_mm / self.spacing_zyx
+        self.compute_curvature_indices(self.smooth_centerline)
         return self.smooth_centerline
+
+    def compute_curvature_indices(
+        self,
+        centerline_zyx: np.ndarray | None = None,
+        region_names: Sequence[str] | None = None,
+    ) -> dict[str, float]:
+        """
+        Compute total and cutoff-based centerline curvature indices.
+
+        The curvature index is the path length divided by the straight-line
+        distance between the same endpoints. Values are 1.0 for a straight
+        segment and increase as the segment bends.
+        """
+        if centerline_zyx is None:
+            centerline_zyx = self.smooth_centerline
+        if centerline_zyx is None:
+            raise ValueError("No centerline. Run `smooth_spline()` first.")
+
+        centerline = self._validate_centerline(centerline_zyx)
+        centerline_mm = centerline * self.spacing_zyx
+        cumulative_length = self._cumulative_centerline_length(centerline_mm)
+        self._set_centerline_midpoint(centerline, cumulative_length, self.mask.shape)
+        bins = (0.0,) + self.cutoffs + (1.0,)
+        segments = self._centerline_segments_by_fraction(centerline_mm, bins)
+        first_segment, last_segment = self._centerline_segments_by_fraction(
+            centerline_mm,
+            (0.0, 0.5, 1.0),
+        )
+
+        if region_names is None:
+            names = tuple(f"region_{idx}" for idx in range(1, len(segments) + 1))
+        else:
+            names = tuple(str(name) for name in region_names)
+            if len(names) != len(segments):
+                raise ValueError(
+                    "`region_names` length must match the number of centerline regions."
+                )
+            if any(not name for name in names):
+                raise ValueError("`region_names` must not contain empty values.")
+            if len(set(names)) != len(names):
+                raise ValueError("`region_names` must contain unique values.")
+            if any(name in {"first", "last"} for name in names):
+                raise ValueError("`first` and `last` are reserved curvature region names.")
+
+        total_curvature = self._curvature_index_from_points(centerline_mm)
+        result = {"curvature_index": total_curvature}
+        self.curvature_index = total_curvature
+        self.region_curvature_indices = {}
+
+        for name, segment in zip(names, segments):
+            value = self._curvature_index_from_points(segment)
+            result[f"{name}_curvature_index"] = value
+            self.region_curvature_indices[name] = value
+
+        self.first_curvature_index = self._curvature_index_from_points(first_segment)
+        self.last_curvature_index = self._curvature_index_from_points(last_segment)
+        result["first_curvature_index"] = self.first_curvature_index
+        result["last_curvature_index"] = self.last_curvature_index
+        self.region_curvature_indices["first"] = self.first_curvature_index
+        self.region_curvature_indices["last"] = self.last_curvature_index
+
+        return result
 
     def create_shell_mask(
         self,
@@ -244,6 +313,7 @@ class RegionCenterlinePartitioner:
 
         s = cum_len / cum_len[-1]
         self.cumulative_length = s
+        self._set_centerline_midpoint(centerline, cum_len, mask.shape)
         self._set_cutoff_locations(centerline, cum_len, mask.shape)
 
         if voxels_zyx.size == 0:
@@ -345,6 +415,119 @@ class RegionCenterlinePartitioner:
         max_zyx = np.asarray(volume_shape, dtype=np.int64) - 1
         cutoff_voxels = np.rint(self.cutoff_points_zyx).astype(np.int64)
         self.cutoff_voxels_zyx = np.clip(cutoff_voxels, 0, max_zyx)
+
+    def _set_centerline_midpoint(
+        self,
+        centerline_zyx: np.ndarray,
+        cumulative_length: np.ndarray,
+        volume_shape: tuple[int, ...],
+    ) -> None:
+        self.centerline_midpoint_zyx = self._centerline_point_at_fraction(
+            centerline_zyx,
+            cumulative_length,
+            0.5,
+        )
+        max_zyx = np.asarray(volume_shape, dtype=np.int64) - 1
+        centerline_midpoint_voxel = np.rint(self.centerline_midpoint_zyx).astype(np.int64)
+        self.centerline_midpoint_voxel_zyx = np.clip(centerline_midpoint_voxel, 0, max_zyx)
+
+    @classmethod
+    def _centerline_segments_by_fraction(
+        cls,
+        centerline_mm: np.ndarray,
+        fractions: Sequence[float],
+    ) -> list[np.ndarray]:
+        cumulative_length = cls._cumulative_centerline_length(centerline_mm)
+        total_length = float(cumulative_length[-1])
+        if total_length <= 0:
+            raise ValueError("Centerline length is zero.")
+
+        boundary_points = [
+            cls._centerline_point_at_fraction(centerline_mm, cumulative_length, fraction)
+            for fraction in fractions
+        ]
+
+        segments: list[np.ndarray] = []
+        for start_fraction, end_fraction, start_point, end_point in zip(
+            fractions[:-1],
+            fractions[1:],
+            boundary_points[:-1],
+            boundary_points[1:],
+        ):
+            start_length = float(start_fraction) * total_length
+            end_length = float(end_fraction) * total_length
+            start_idx = int(np.searchsorted(cumulative_length, start_length, side="right"))
+            end_idx = int(np.searchsorted(cumulative_length, end_length, side="left"))
+            interior = centerline_mm[start_idx:end_idx]
+            segment = np.vstack([start_point, interior, end_point])
+            segments.append(cls._drop_consecutive_duplicate_points(segment))
+
+        return segments
+
+    @staticmethod
+    def _cumulative_centerline_length(centerline_points: np.ndarray) -> np.ndarray:
+        diffs = np.diff(centerline_points, axis=0)
+        seg_len = np.linalg.norm(diffs, axis=1)
+        return np.concatenate([[0.0], np.cumsum(seg_len)])
+
+    @classmethod
+    def _centerline_point_at_fraction(
+        cls,
+        centerline_points: np.ndarray,
+        cumulative_length: np.ndarray,
+        fraction: float,
+    ) -> np.ndarray:
+        target_length = float(fraction) * float(cumulative_length[-1])
+        return cls._interpolate_centerline_points(
+            centerline_points,
+            cumulative_length,
+            target_length,
+        )
+
+    @staticmethod
+    def _interpolate_centerline_points(
+        centerline_points: np.ndarray,
+        cumulative_length: np.ndarray,
+        target_length: float,
+    ) -> np.ndarray:
+        if target_length <= 0:
+            return centerline_points[0]
+        if target_length >= cumulative_length[-1]:
+            return centerline_points[-1]
+
+        right_idx = int(np.searchsorted(cumulative_length, target_length, side="left"))
+        if right_idx <= 0:
+            return centerline_points[0]
+
+        left_idx = right_idx - 1
+        segment_length = cumulative_length[right_idx] - cumulative_length[left_idx]
+        if segment_length <= 0:
+            return centerline_points[left_idx]
+
+        weight = (target_length - cumulative_length[left_idx]) / segment_length
+        return centerline_points[left_idx] + weight * (
+            centerline_points[right_idx] - centerline_points[left_idx]
+        )
+
+    @staticmethod
+    def _curvature_index_from_points(points_mm: np.ndarray) -> float:
+        if len(points_mm) < 2:
+            return float("nan")
+
+        diffs = np.diff(points_mm, axis=0)
+        path_length = float(np.sum(np.linalg.norm(diffs, axis=1)))
+        chord_length = float(np.linalg.norm(points_mm[-1] - points_mm[0]))
+        if path_length <= 0 or chord_length <= 0:
+            return float("nan")
+        return float(path_length / chord_length)
+
+    @staticmethod
+    def _drop_consecutive_duplicate_points(points: np.ndarray) -> np.ndarray:
+        if len(points) < 2:
+            return points
+
+        keep = np.concatenate([[True], np.linalg.norm(np.diff(points, axis=0), axis=1) > 0])
+        return points[keep]
 
     @staticmethod
     def _array_to_label_image(label: np.ndarray, reference: sitk.Image) -> sitk.Image:
