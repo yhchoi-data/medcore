@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any, Mapping
 
+import numpy as np
 import pandas as pd
 import SimpleITK as sitk
+from scipy.ndimage import center_of_mass
 
 from ..detect import get_coronal_plane_degree
 from ..feature import (
@@ -25,27 +28,184 @@ from ..utils import (
     figure_overlay_label_reference_slice,
     figure_overlay_pancreatic_craniocaudal_slices,
     figure_overlay_pancreatic_distance_metrics,
+    sitk_get_shape_features,
     sitk_make_euler3dtransform,
     sitk_resampler,
 )
+
+PANCREATIC_MORPHOLOGY_KEYS = (
+    "curvature_head_pancreas",
+    "curvature_body_pancreas",
+    "curvature_tail_pancreas",
+    "curvature_first_pancreas",
+    "curvature_last_pancreas",
+    "curvature_pancreas",
+    "elongation_pancreas",
+    "flatness_pancreas",
+    "roundness_pancreas",
+    "length(cm)_pancres",
+    "volume(cm3)_pancreas",
+)
+PANCREATIC_DISTANCE_KEYS = (
+    "center_of_mass_l1",
+    "anterior_point_l1",
+    "center_point_pancreas",
+    "head_point_pancreas",
+    "tail_point_pancreas",
+    "IS_dist_center_from_l1(mm)",
+    "AP_dist_center_from_l1(mm)",
+    "RL_dist_center_from_l1(mm)",
+    "IS_dist_head_from_l1(mm)",
+    "AP_dist_head_from_l1(mm)",
+    "RL_dist_head_from_l1(mm)",
+    "IS_dist_tail_from_l1(mm)",
+    "AP_dist_tail_from_l1(mm)",
+    "RL_dist_tail_from_l1(mm)",
+    "IS_dist_center_from_l1_anterior(mm)",
+    "AP_dist_center_from_l1_anterior(mm)",
+    "RL_dist_center_from_l1_anterior(mm)",
+    "IS_dist_head_from_l1_anterior(mm)",
+    "AP_dist_head_from_l1_anterior(mm)",
+    "RL_dist_head_from_l1_anterior(mm)",
+    "IS_dist_tail_from_l1_anterior(mm)",
+    "AP_dist_tail_from_l1_anterior(mm)",
+    "RL_dist_tail_from_l1_anterior(mm)",
+)
+
+
+def pancreatic_morphology(
+    volume_pancreas: sitk.Image,
+    *,
+    partitioner: RegionCenterlinePartitioner | None = None,
+    cutoffs: tuple[float, ...] = (0.25, 0.75),
+    target_spacing_mm: float = 1.0,
+    smoothing: float = 15.0,
+    label: int = 1,
+) -> dict[str, Any]:
+    """Extract pancreas centerline curvature and SimpleITK shape features."""
+    if partitioner is None:
+        partitioner = RegionCenterlinePartitioner(
+            mask_volume=volume_pancreas,
+            cutoffs=cutoffs,
+            target_spacing_mm=target_spacing_mm,
+            smoothing=smoothing,
+        )
+        partitioner.run()
+
+    if partitioner.region_curvature_indices is None:
+        raise RuntimeError("Pancreas curvature indices are not available.")
+    if partitioner.centerline_length is None:
+        raise RuntimeError("Pancreas centerline length is not available.")
+
+    curvature = partitioner.region_curvature_indices
+    shape_info = sitk_get_shape_features(volume_pancreas, label=label)
+
+    return {
+        "curvature_head_pancreas": _first_existing_value(curvature, "region_1", "head"),
+        "curvature_body_pancreas": _first_existing_value(curvature, "region_2", "body"),
+        "curvature_tail_pancreas": _first_existing_value(curvature, "region_3", "tail"),
+        "curvature_first_pancreas": curvature["first"],
+        "curvature_last_pancreas": curvature["last"],
+        "curvature_pancreas": partitioner.curvature_index,
+        "elongation_pancreas": shape_info["elongation"],
+        "flatness_pancreas": shape_info["flatness"],
+        "roundness_pancreas": shape_info["roundness"],
+        "length(cm)_pancres": partitioner.centerline_length / 10.0,
+        "volume(cm3)_pancreas": shape_info["volume_ml"],
+    }
+
+
+def pancreatic_distance(
+    volume_l1: sitk.Image,
+    *,
+    partitioner: RegionCenterlinePartitioner,
+) -> dict[str, Any]:
+    """Extract pancreas point offsets from L1 centroid and anterior L1 point."""
+    if partitioner.smooth_centerline is None:
+        raise RuntimeError("Pancreas smooth centerline is not available.")
+    if partitioner.centerline_midpoint_voxel_zyx is None:
+        raise RuntimeError("Pancreas centerline midpoint is not available.")
+
+    mask_l1 = sitk.GetArrayFromImage(volume_l1) > 0
+    if not np.any(mask_l1):
+        raise ValueError("L1 mask is empty.")
+
+    center_l1 = np.asarray(center_of_mass(mask_l1), dtype=np.float64).astype(np.int64)
+    optimal_idx = extract_optimal_transverse_process_slice(volume_l1)
+    l1_slice = mask_l1[optimal_idx]
+    if not np.any(l1_slice):
+        raise ValueError("No L1 pixels found on the selected transverse process slice.")
+
+    center_l1_anterior = np.array(
+        [optimal_idx, np.where(l1_slice)[0].min(), center_l1[2]],
+        dtype=np.int64,
+    )
+    center_pancreas = np.asarray(partitioner.centerline_midpoint_voxel_zyx, dtype=np.int64)
+    head_pancreas = np.asarray(partitioner.smooth_centerline[0], dtype=np.float64).astype(np.int64)
+    tail_pancreas = np.asarray(partitioner.smooth_centerline[-1], dtype=np.float64).astype(np.int64)
+
+    results: dict[str, Any] = {
+        "center_of_mass_l1": center_l1,
+        "anterior_point_l1": center_l1_anterior,
+        "center_point_pancreas": center_pancreas,
+        "head_point_pancreas": head_pancreas,
+        "tail_point_pancreas": tail_pancreas,
+    }
+    points = {
+        "center": center_pancreas,
+        "head": head_pancreas,
+        "tail": tail_pancreas,
+    }
+    for ref_name, ref_point in (
+        ("l1", center_l1),
+        ("l1_anterior", center_l1_anterior),
+    ):
+        for point_name, point in points.items():
+            _update_zyx_distance_metrics(
+                results,
+                name=f"{point_name}_from_{ref_name}",
+                diff_zyx=point - ref_point,
+                spacing_zyx=np.asarray(volume_l1.GetSpacing()[::-1], dtype=np.float64),
+            )
+    return results
+
+
+def _first_existing_value(values: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in values:
+            return values[key]
+    return None
+
+
+def _update_zyx_distance_metrics(
+    results: dict[str, Any],
+    *,
+    name: str,
+    diff_zyx: np.ndarray,
+    spacing_zyx: np.ndarray,
+) -> None:
+    diff_mm = np.rint(np.asarray(diff_zyx, dtype=np.float64) * spacing_zyx).astype(int)
+    results[f"IS_dist_{name}(mm)"] = int(diff_mm[0])
+    results[f"AP_dist_{name}(mm)"] = int(diff_mm[1])
+    results[f"RL_dist_{name}(mm)"] = int(diff_mm[2])
 
 
 class CTFeatureExtractor:
     metadata_keys = ("hutom_id", "study_uid", "series_uid", "fpath")
     peripancreatic_base_metric_keys = (
         "total_shell_voxel_count",
-        "total_shell_volume_cm3",
-        "total_fat_voxel_count",
-        "total_fat_volume_cm3",
-        "superior_fat_voxel_count",
-        "superior_fat_volume_cm3",
-        "anterior_fat_voxel_count",
-        "anterior_fat_volume_cm3",
+        "total_shell_volume(cm3)",
+        "total_shell_fat_voxel_count",
+        "total_shell_fat_volume(cm3)",
     )
     craniocaudal_base_metric_keys = (
         "total_fat_voxel_count",
-        "total_fat_volume_cm3",
+        "total_fat_volume(cm3)",
     )
+    craniocaudal_output_key_map = {
+        "total_fat_voxel_count": "craniocaudal_total_fat_voxel_count",
+        "total_fat_volume(cm3)": "craniocaudal_total_fat_volume(cm3)",
+    }
     craniocaudal_octants = (
         "superior_anterior_left",
         "superior_anterior_right",
@@ -56,20 +216,43 @@ class CTFeatureExtractor:
         "inferior_posterior_left",
         "inferior_posterior_right",
     )
+    abdominal_distance_metric_keys = (
+        "Max_SFT(cm)",
+        "Min_SFT(cm)",
+        "Mean_SFT(cm)",
+        "Median_SFT(cm)",
+        "Left_SFT(cm)",
+        "Right_SFT(cm)",
+        "Anterior_SFT(cm)",
+        "LRD(cm)",
+        "APD(cm)",
+        "AP(cm)",
+    )
+    pancreatic_morphology_metric_keys = PANCREATIC_MORPHOLOGY_KEYS
+    pancreatic_distance_metric_keys = PANCREATIC_DISTANCE_KEYS
 
     def __init__(
         self,
         save_dir: str | Path | None = None,
         *,
-        save_figures: bool = True,
+        save_figures: bool | None = None,
         pancreas_cutoffs: tuple[float, float] = (0.25, 0.75),
         shell_inner_mm: float = 5,
         shell_outer_mm: float = 10,
         hu_range: tuple[float, float] = (-190, -30),
         coronal_degree_threshold: float = 5,
+        craniocaudal_center_cutoff: float | None = None,
     ) -> None:
+        if save_figures is None:
+            save_figures = save_dir is not None
         if save_figures and save_dir is None:
             raise ValueError("save_dir must be provided when save_figures=True.")
+        if craniocaudal_center_cutoff is not None:
+            craniocaudal_center_cutoff = float(craniocaudal_center_cutoff)
+            if not math.isfinite(craniocaudal_center_cutoff):
+                raise ValueError("`craniocaudal_center_cutoff` must be finite.")
+            if craniocaudal_center_cutoff <= 0.0 or craniocaudal_center_cutoff >= 1.0:
+                raise ValueError("`craniocaudal_center_cutoff` must be between 0 and 1.")
 
         self.save_dir = None if save_dir is None else Path(save_dir)
         self.save_figures = save_figures
@@ -78,6 +261,7 @@ class CTFeatureExtractor:
         self.shell_outer_mm = shell_outer_mm
         self.hu_range = hu_range
         self.coronal_degree_threshold = coronal_degree_threshold
+        self.craniocaudal_center_cutoff = craniocaudal_center_cutoff
         self.torso_segmentor = TorsoSegmenter()
 
     def run(
@@ -116,6 +300,7 @@ class CTFeatureExtractor:
         if pancreas_is_empty:
             pancreatic_distance_metrics = self._empty_pancreatic_distance_metrics()
             pancreas_ccfat_metrics = self._empty_craniocaudal_fat_metrics()
+            pancreatic_geometry_metrics = self._empty_pancreatic_geometry_metrics()
         else:
             pancreatic_distance_metrics = extract_pancreatic_distance_metrics(
                 volume_torso=sup["vol_torso"],
@@ -123,13 +308,25 @@ class CTFeatureExtractor:
             )
             self._save_pancreatic_distance_figure(ctx, sup, pancreatic_distance_metrics)
 
+            pancreas_ccfat_center_mask = self._craniocaudal_center_mask(sup["vol_pancreas"])
             pancreas_ccfat_metrics = extract_craniocaudal_fat_volume(
                 vol=sup["vol"],
                 vol_mask=sup["vol_pancreas"],
                 vol_shell=sup["vol_vfat"],
                 hu_range=self.hu_range,
+                center_mask=pancreas_ccfat_center_mask,
             )
-            self._save_pancreatic_ccfat_figure(ctx, sup, pancreas_ccfat_metrics)
+            self._save_pancreatic_ccfat_figure(
+                ctx,
+                sup,
+                pancreas_ccfat_metrics,
+                center_mask=pancreas_ccfat_center_mask,
+            )
+            pancreatic_geometry_metrics = self._extract_pancreatic_geometry_metrics(
+                volumes=volumes,
+                vol_pancreas=vol_pancreas_calib,
+                tfm_axis=tfm_axis,
+            )
 
         metric_row = self._build_metric_row(
             n_components=n_components,
@@ -137,6 +334,7 @@ class CTFeatureExtractor:
             pancreas_fat_metrics=pancreas_fat_metrics,
             pancreas_ccfat_metrics=pancreas_ccfat_metrics,
             pancreatic_distance_metrics=pancreatic_distance_metrics,
+            pancreatic_geometry_metrics=pancreatic_geometry_metrics,
             abdominal_distance_metrics=abdominal_distance_metrics,
         )
         tissue_metrics = self._extract_organ_tissue_metrics(
@@ -148,7 +346,7 @@ class CTFeatureExtractor:
             optimal_idx=optimal_idx,
         )
         if pancreas_is_empty:
-            tissue_metrics["pancreas_volume_cm3"] = None
+            tissue_metrics["pancreas_volume(cm3)"] = None
 
         result = {key: ctx["metadata"].get(key, "") for key in self.metadata_keys}
         result.update(metric_row)
@@ -180,11 +378,18 @@ class CTFeatureExtractor:
         mpath = ctx["mask_path"]
         return {
             "vol": ImageReader(ctx["ct_path"]).read(),
+            "vol_l1": ImageReader(self._l1_volume_path(mpath)).read(),
             "vol_l3": ImageReader(mpath / "vertebrae_L3.nii.gz").read(),
             "vol_vfat": ImageReader(mpath / "visceral_fat.nii.gz").read(),
             "vol_sfat": ImageReader(mpath / "subcutaneous_fat.nii.gz").read(),
             "vol_pancreas": ImageReader(mpath / "pancreas.nii.gz").read(),
         }
+
+    def _l1_volume_path(self, mpath: Path) -> Path:
+        l1_path = mpath / "vertebrae_l1.nii.gz"
+        if l1_path.exists():
+            return l1_path
+        return mpath / "vertebrae_L1.nii.gz"
 
     def _largest_component(self, vol_pancreas: sitk.Image) -> tuple[sitk.Image, int]:
         cc = sitk.RelabelComponent(sitk.ConnectedComponent(vol_pancreas))
@@ -195,9 +400,14 @@ class CTFeatureExtractor:
 
     def _empty_peripancreatic_metrics(self) -> dict[str, Any]:
         keys = list(self.peripancreatic_base_metric_keys)
-        for label in range(1, self._n_pancreas_regions() + 1):
-            keys.append(f"region_{label}_fat_voxel_count")
-            keys.append(f"region_{label}_fat_volume_cm3")
+        for region_name in self._pancreas_fat_region_names():
+            keys.append(f"{region_name}_fat_voxel_count")
+            keys.append(f"{region_name}_fat_volume(cm3)")
+        # keys.append("curvature_index")
+        # for region_name in self._pancreas_curvature_region_names():
+        #     keys.append(f"{region_name}_curvature_index")
+        # keys.append("first_curvature_index")
+        # keys.append("last_curvature_index")
         return {key: None for key in keys}
 
     def _n_pancreas_regions(self) -> int:
@@ -206,15 +416,54 @@ class CTFeatureExtractor:
         except TypeError:
             return 2
 
+    def _pancreas_curvature_region_names(self) -> tuple[str, ...]:
+        n_regions = self._n_pancreas_regions()
+        if n_regions == 3:
+            # RegionCenterlinePartitioner's pancreas centerline currently follows head -> tail.
+            return ("head", "body", "tail")
+        return tuple(f"region_{label}" for label in range(1, n_regions + 1))
+
+    def _pancreas_fat_region_names(self) -> tuple[str, ...]:
+        n_regions = self._n_pancreas_regions()
+        if n_regions == 3:
+            return ("pancreas_head", "pancreas_body", "pancreas_tail")
+        return tuple(f"region_{label}" for label in range(1, n_regions + 1))
+
     def _empty_pancreatic_distance_metrics(self) -> dict[str, Any]:
-        return {"PAAD_cm": None}
+        return {"PAAD(cm)": None}
+
+    def _empty_pancreatic_geometry_metrics(self) -> dict[str, Any]:
+        keys = (*self.pancreatic_morphology_metric_keys, *self.pancreatic_distance_metric_keys)
+        return {key: None for key in keys}
 
     def _empty_craniocaudal_fat_metrics(self) -> dict[str, Any]:
         keys = list(self.craniocaudal_base_metric_keys)
         for octant in self.craniocaudal_octants:
             keys.append(f"{octant}_fat_voxel_count")
-            keys.append(f"{octant}_fat_volume_cm3")
+            keys.append(f"{octant}_fat_volume(cm3)")
         return {key: None for key in keys}
+
+    def _craniocaudal_center_mask(
+        self,
+        vol_pancreas: sitk.Image,
+    ) -> tuple[float, float, float] | None:
+        if self.craniocaudal_center_cutoff is None:
+            return None
+
+        partitioner = RegionCenterlinePartitioner(
+            mask_volume=vol_pancreas,
+            cutoffs=self.craniocaudal_center_cutoff,
+            target_spacing_mm=1.0,
+            smoothing=15.0,
+        )
+        partitioner.run()
+        if partitioner.cutoff_voxels_zyx is None or len(partitioner.cutoff_voxels_zyx) == 0:
+            raise RuntimeError("Failed to compute craniocaudal center cutoff voxel.")
+
+        center_mask = tuple(float(value) for value in partitioner.cutoff_voxels_zyx[0])
+        if len(center_mask) != 3:
+            raise RuntimeError("Craniocaudal center cutoff voxel must have three coordinates.")
+        return center_mask
 
     def _extract_peripancreatic_metrics(
         self,
@@ -242,7 +491,52 @@ class CTFeatureExtractor:
             vol_shell_region=vol_pancreas_shell_region,
             hu_range=self.hu_range,
         )
+        # metrics.update(
+        #     partitioner.compute_curvature_indices(
+        #         region_names=self._pancreas_curvature_region_names(),
+        #     )
+        # )
         self._save_region_figure(ctx, vol_pancreas_region, partitioner)
+        return metrics
+
+    def _extract_pancreatic_geometry_metrics(
+        self,
+        volumes: dict[str, sitk.Image],
+        vol_pancreas: sitk.Image,
+        tfm_axis: sitk.Transform,
+    ) -> dict[str, Any]:
+        vol_pancreas_sup_rsl = sitk_resampler(
+            vol_pancreas,
+            tfm_axis,
+            new_spacing=(1.0, 1.0, 1.0),
+            interpolation="nn",
+            default_pixel=0,
+        )
+        partitioner = RegionCenterlinePartitioner(
+            mask_volume=vol_pancreas_sup_rsl,
+            cutoffs=self.pancreas_cutoffs,
+            target_spacing_mm=1.0,
+            smoothing=15.0,
+        )
+        partitioner.run()
+
+        metrics = pancreatic_morphology(
+            vol_pancreas_sup_rsl,
+            partitioner=partitioner,
+        )
+        vol_l1 = volumes.get("vol_l1")
+        if vol_l1 is None:
+            metrics.update({key: None for key in self.pancreatic_distance_metric_keys})
+            return metrics
+
+        vol_l1_sup_rsl = sitk_resampler(
+            vol_l1,
+            tfm_axis,
+            new_spacing=(1.0, 1.0, 1.0),
+            interpolation="nn",
+            default_pixel=0,
+        )
+        metrics.update(pancreatic_distance(vol_l1_sup_rsl, partitioner=partitioner))
         return metrics
 
     def _make_supine_transform(self, vol: sitk.Image) -> tuple[sitk.Transform, float]:
@@ -296,7 +590,7 @@ class CTFeatureExtractor:
             return_vols=True,
         )
         organ_list = organ_vols.columns.tolist()
-        organ_vols = organ_vols.rename(columns={name: f"{name}_volume_cm3" for name in organ_list})
+        organ_vols = organ_vols.rename(columns={name: f"{name}_volume(cm3)" for name in organ_list})
 
         tissue_slice_masks, tissue_slice_areas = compute_label_areas(
             tissuefiles,
@@ -306,7 +600,7 @@ class CTFeatureExtractor:
         )
         tissue_list = tissue_slice_areas.columns.tolist()
         tissue_slice_areas = tissue_slice_areas.rename(
-            columns={name: f"{name}_l3_area_cm2" for name in tissue_list}
+            columns={name: f"{name}_l3_area(cm2)" for name in tissue_list}
         )
         tissue_slice_areas["slice_index_l3"] = optimal_idx
 
@@ -331,25 +625,45 @@ class CTFeatureExtractor:
         pancreas_fat_metrics: dict[str, Any],
         pancreas_ccfat_metrics: dict[str, Any],
         pancreatic_distance_metrics: dict[str, Any],
+        pancreatic_geometry_metrics: dict[str, Any],
         abdominal_distance_metrics: dict[str, Any],
     ) -> dict[str, Any]:
-        return {
-            "N.Pancreas_Connected_Components": n_components if n_components > 0 else None,
-            "coronal_plane_degree": coronal_degree,
-            **pancreas_fat_metrics,
-            **pancreas_ccfat_metrics,
-            "PAAD_cm": pancreatic_distance_metrics["PAAD_cm"],
-            "Max_SFT_cm": abdominal_distance_metrics["Max_SFT_cm"],
-            "Min_SFT_cm": abdominal_distance_metrics["Min_SFT_cm"],
-            "Mean_SFT_cm": abdominal_distance_metrics["Mean_SFT_cm"],
-            "Median_SFT_cm": abdominal_distance_metrics["Median_SFT_cm"],
-            "Left_SFT_cm": abdominal_distance_metrics["Left_SFT_cm"],
-            "Right_SFT_cm": abdominal_distance_metrics["Right_SFT_cm"],
-            "Anterior_SFT_cm": abdominal_distance_metrics["Anterior_SFT_cm"],
-            "LRD_cm": abdominal_distance_metrics["LRD_cm"],
-            "APD_cm": abdominal_distance_metrics["APD_cm"],
-            "AP_cm": abdominal_distance_metrics["AP_cm"],
+        row: dict[str, Any] = {
+            "N.Pancreas_Connected_Components": n_components if n_components > 0 else None
         }
+        row.update(self._peripancreatic_fat_metrics_for_output(pancreas_fat_metrics))
+        row["coronal_plane_degree"] = coronal_degree
+        row.update(
+            {key: abdominal_distance_metrics[key] for key in self.abdominal_distance_metric_keys}
+        )
+        row.update(pancreatic_distance_metrics)
+        row.update(pancreatic_geometry_metrics)
+        row.update(self._craniocaudal_fat_metrics_for_output(pancreas_ccfat_metrics))
+        return row
+
+    def _craniocaudal_fat_metrics_for_output(
+        self,
+        metrics: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            self.craniocaudal_output_key_map.get(key, key): value for key, value in metrics.items()
+        }
+
+    def _peripancreatic_fat_metrics_for_output(
+        self,
+        metrics: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        region_names = self._pancreas_fat_region_names()
+        output: dict[str, Any] = {}
+        for key, value in metrics.items():
+            output_key = key
+            for label, region_name in enumerate(region_names, start=1):
+                prefix = f"region_{label}_"
+                if key.startswith(prefix):
+                    output_key = f"{region_name}_{key[len(prefix):]}"
+                    break
+            output[output_key] = value
+        return output
 
     def _save_region_figure(
         self,
@@ -409,15 +723,19 @@ class CTFeatureExtractor:
         ctx: dict[str, Any],
         sup: dict[str, sitk.Image],
         pancreas_ccfat_metrics: dict[str, Any],
+        center_mask: tuple[float, float, float] | None = None,
     ) -> None:
         if not self.save_figures:
             return
         fname = f"{ctx['prefix']}_pancreatic_vfat_volumes.png"
+        volume_metrics = pancreas_ccfat_metrics
+        if center_mask is not None:
+            volume_metrics = {**pancreas_ccfat_metrics, "center_of_mask": center_mask}
         figure_overlay_pancreatic_craniocaudal_slices(
             volume=sup["vol"],
             volume_pancreas=sup["vol_pancreas"],
             volume_visceralfat=sup["vol_vfat"],
-            volume_metrics=pancreas_ccfat_metrics,
+            volume_metrics=volume_metrics,
             show=False,
             save_path=self._figure_path("abdominal_metric", fname),
         )

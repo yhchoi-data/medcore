@@ -112,6 +112,28 @@ def sitk_get_array(
         return image
 
 
+def sitk_get_shape_features(mask_img: sitk.Image, label: int = 1) -> dict[str, float]:
+    """
+    mask_img: SimpleITK Image
+        0 = background, label = pancreas
+    """
+
+    stats = sitk.LabelShapeStatisticsImageFilter()
+    stats.Execute(mask_img)
+
+    if not stats.HasLabel(label):
+        raise ValueError(f"Label {label} not found in mask.")
+
+    physical_size = stats.GetPhysicalSize(label)
+    return {
+        "volume_mm3": physical_size,
+        "volume_ml": physical_size / 1000.0,
+        "elongation": stats.GetElongation(label),
+        "flatness": stats.GetFlatness(label),
+        "roundness": stats.GetRoundness(label),
+    }
+
+
 def sitk_make_euler3dtransform(
     sitk_vol: sitk.Image,
     rotation_deg: float,
